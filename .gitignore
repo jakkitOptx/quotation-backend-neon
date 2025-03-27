@@ -1,0 +1,73 @@
+# Node modules
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Environment variables
+.env
+
+# Directory for local env files
+.env.local
+.env.*.local
+
+# Vercel and Netlify
+.vercel/
+.netlify/
+
+# IDE and editor settings
+.vscode/
+.idea/
+.DS_Store
+
+# Debug and OS files
+*.swp
+Thumbs.db
+*.bak
+*.tmp
+
+# Coverage files
+coverage/
+
+# Build output
+dist/
+build/
+
+# Dependency directories
+bower_components/
+
+# Database files
+*.sqlite3
+*.db
+
+# Static files for uploads
+uploads/
+
+# Test files
+*.test.js
+*.spec.js
+__tests__/
+__mocks__/
+
+# Logs from services
+*.log
+*.out
+*.err
+
+# TypeScript
+*.tsbuildinfo
+
+# npm package lock files
+package-lock.json
+yarn.lock
+.vercel
