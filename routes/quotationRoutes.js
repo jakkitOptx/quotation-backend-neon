@@ -194,6 +194,22 @@ router.patch("/:id", async (req, res) => {
       return res.status(400).json({ message: "Type is required" });
     }
 
+    // ✅ ค้นหา Quotation ปัจจุบัน
+    const existingQuotation = await Quotation.findById(req.params.id);
+    if (!existingQuotation) {
+      return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    // ✅ ถ้า type เปลี่ยนไป ให้ตรวจสอบ runNumber ใหม่ และกำหนดเป็นเลข 3 หลัก
+    let runNumber = existingQuotation.runNumber;
+    if (type !== existingQuotation.type) {
+      const latestQuotation = await Quotation.findOne({ type }).sort({ runNumber: -1 });
+      runNumber = latestQuotation 
+        ? String(Number(latestQuotation.runNumber) + 1).padStart(3, "0") 
+        : "001";
+    }
+
+    // ✅ คำนวณตัวเลข
     let totalBeforeFee = 0;
     const processedItems = items.map((item) => {
       const unit = Number(item.unit) || 0;
@@ -209,12 +225,13 @@ router.patch("/:id", async (req, res) => {
     const vat = roundUp(amountBeforeTax * 0.07);
     const netAmount = roundUp(amountBeforeTax + vat);
 
+    // ✅ อัปเดต Quotation
     const updatedQuotation = await Quotation.findByIdAndUpdate(
       req.params.id,
       {
         title,
         client,
-        clientId, // ✅ อัปเดต clientId
+        clientId,
         salePerson,
         documentDate,
         productName,
@@ -236,6 +253,7 @@ router.patch("/:id", async (req, res) => {
         remark,
         CreditTerm,
         type,
+        runNumber,
         items: processedItems,
         isDetailedForm,
       },
@@ -248,6 +266,7 @@ router.patch("/:id", async (req, res) => {
 
     res.status(200).json(updatedQuotation);
   } catch (error) {
+    console.error("Error updating quotation:", error);
     res.status(400).json({ message: error.message });
   }
 });
