@@ -9,7 +9,7 @@ const roundUp = (num) => {
   return (num * 100) % 1 >= 0.5 ? _.ceil(num, 2) : _.round(num, 2);
 };
 
-// ✅ สร้างใบเสนอราคา พร้อม `clientId`
+// ✅ สร้างใบเสนอราคา พร้อม `clientId` และตรวจสอบ runNumber ที่หายไป
 router.post("/", async (req, res) => {
   const {
     title,
@@ -52,11 +52,11 @@ router.post("/", async (req, res) => {
       const unit = Number(item.unit) || 0;
       const unitPrice = roundUp(parseFloat(item.unitPrice) || 0);
       const amount = roundUp(unit * unitPrice);
-    
+
       if (!item.description) {
         throw new Error(`Item at index ${index} is missing a description.`);
       }
-    
+
       totalBeforeFee += amount;
       return { ...item, unitPrice, amount };
     });
@@ -67,15 +67,22 @@ router.post("/", async (req, res) => {
     const vat = roundUp(amountBeforeTax * 0.07);
     const netAmount = roundUp(amountBeforeTax + vat);
 
-    const lastQuotation = await Quotation.findOne({ type }).sort({ runNumber: -1 });
-    const newRunNumber = lastQuotation
-      ? String(Number(lastQuotation.runNumber) + 1).padStart(3, "0")
-      : "001";
+    // ✅ หา runNumber ที่ว่างอยู่ใน type นั้น
+    const existingQuotations = await Quotation.find({ type }).select("runNumber");
+    const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
+
+    let newRunNumber = "001";
+    for (let i = 1; i <= 999; i++) {
+      if (!existingRunNumbers.includes(i)) {
+        newRunNumber = String(i).padStart(3, "0");
+        break;
+      }
+    }
 
     const quotation = new Quotation({
       title,
       client,
-      clientId, // ✅ เก็บ clientId
+      clientId,
       salePerson,
       documentDate,
       productName,
@@ -109,9 +116,11 @@ router.post("/", async (req, res) => {
     await quotation.save();
     res.status(201).json(quotation);
   } catch (error) {
+    console.error("Error creating quotation:", error);
     res.status(400).json({ message: error.message });
   }
 });
+
 
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId`
 router.get("/", async (req, res) => {
