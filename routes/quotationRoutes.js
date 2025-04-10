@@ -67,12 +67,15 @@ router.post("/", async (req, res) => {
     const vat = roundUp(amountBeforeTax * 0.07);
     const netAmount = roundUp(amountBeforeTax + vat);
 
-    // ✅ หา runNumber ที่ว่างอยู่ใน type นั้น
+    // ✅ หา runNumber ที่ว่างอยู่ใน type นั้น และเริ่มจากค่าใน .env
+    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
+
     const existingQuotations = await Quotation.find({ type }).select("runNumber");
     const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
 
     let newRunNumber = "001";
-    for (let i = 1; i <= 999; i++) {
+    for (let i = startRunNumber; i <= 999; i++) {
       if (!existingRunNumbers.includes(i)) {
         newRunNumber = String(i).padStart(3, "0");
         break;
