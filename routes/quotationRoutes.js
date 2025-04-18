@@ -71,8 +71,12 @@ router.post("/", async (req, res) => {
     const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
     const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
 
-    const existingQuotations = await Quotation.find({ type }).select("runNumber");
-    const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
+    const existingQuotations = await Quotation.find({ type }).select(
+      "runNumber"
+    );
+    const existingRunNumbers = existingQuotations.map((q) =>
+      Number(q.runNumber)
+    );
 
     let newRunNumber = "001";
     for (let i = startRunNumber; i <= 999; i++) {
@@ -124,12 +128,14 @@ router.post("/", async (req, res) => {
   }
 });
 
-
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId`
 router.get("/", async (req, res) => {
   try {
     const quotations = await Quotation.find()
-      .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber") // ✅ ดึงข้อมูลลูกค้าครบถ้วน
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      ) // ✅ ดึงข้อมูลลูกค้าครบถ้วน
       .populate({
         path: "approvalHierarchy",
         select: "quotationId approvalHierarchy",
@@ -145,11 +151,16 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ✅ ดึงใบเสนอราคาเดี่ยว
+// ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
+router.get("/paginated", quotationController.getQuotationsWithPagination);
+
+// ดึงใบเสนอราคาเดี่ยว
 router.get("/:id", async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
-      .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber") // ✅ ดึงข้อมูลลูกค้า
+      .select(
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
+      )
       .populate({
         path: "approvalHierarchy",
         select: "quotationId approvalHierarchy",
@@ -157,7 +168,11 @@ router.get("/:id", async (req, res) => {
           path: "approvalHierarchy",
           select: "level approver status",
         },
-      });
+      })
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      ); // เพิ่มการ populate clientId
 
     if (!quotation) {
       return res.status(404).json({ message: "Quotation not found" });
@@ -215,9 +230,11 @@ router.patch("/:id", async (req, res) => {
     // ✅ ถ้า type เปลี่ยนไป ให้ตรวจสอบ runNumber ใหม่ และกำหนดเป็นเลข 3 หลัก
     let runNumber = existingQuotation.runNumber;
     if (type !== existingQuotation.type) {
-      const latestQuotation = await Quotation.findOne({ type }).sort({ runNumber: -1 });
-      runNumber = latestQuotation 
-        ? String(Number(latestQuotation.runNumber) + 1).padStart(3, "0") 
+      const latestQuotation = await Quotation.findOne({ type }).sort({
+        runNumber: -1,
+      });
+      runNumber = latestQuotation
+        ? String(Number(latestQuotation.runNumber) + 1).padStart(3, "0")
         : "001";
     }
 
@@ -324,37 +341,6 @@ router.get(
   "/approval-by-email/:email",
   quotationController.getApprovalQuotationsByEmail
 );
-
-// ดึงใบเสนอราคาเดี่ยว
-router.get("/:id", async (req, res) => {
-  try {
-    const quotation = await Quotation.findById(req.params.id)
-      .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
-      )
-      .populate({
-        path: "approvalHierarchy",
-        select: "quotationId approvalHierarchy",
-        populate: {
-          path: "approvalHierarchy",
-          select: "level approver status",
-        },
-      })
-      .populate(
-        "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
-      ); // เพิ่มการ populate clientId
-
-    if (!quotation) {
-      return res.status(404).json({ message: "Quotation not found" });
-    }
-
-    res.status(200).json(quotation);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
 // เปลี่ยนสถานะอนุมัติ (Approve/Reject)
 router.patch("/:id/approve", async (req, res) => {
   const { status, approver } = req.body;

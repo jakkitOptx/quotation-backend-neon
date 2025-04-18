@@ -81,6 +81,43 @@ exports.getQuotationsByEmail = async (req, res) => {
   }
 };
 
+// ✅ ดึงใบเสนอราคาแบบแบ่งหน้า พร้อม client
+exports.getQuotationsWithPagination = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const [quotations, total] = await Promise.all([
+      Quotation.find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber")
+        .populate({
+          path: "approvalHierarchy",
+          select: "quotationId approvalHierarchy",
+          populate: {
+            path: "approvalHierarchy",
+            select: "level approver status",
+          },
+        }),
+      Quotation.countDocuments()
+    ]);
+
+    res.status(200).json({
+      data: quotations,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (error) {
+    console.error("Error fetching quotations with pagination:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
 // ✅ ดึง Quotation ที่ต้อง Approve ตาม Email และ return reason ด้วย
 exports.getApprovalQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
