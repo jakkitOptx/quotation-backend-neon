@@ -45,6 +45,52 @@ exports.createQuotation = async (req, res) => {
   }
 };
 
+// ✅ ดึง Quotation ตาม email พร้อมแบ่งหน้า
+exports.getQuotationsByEmailPaginated = async (req, res) => {
+  const { email } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const skip = (page - 1) * limit;
+
+  try {
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const total = await Quotation.countDocuments({ createdByUser: email });
+
+    const quotations = await Quotation.find({ createdByUser: email })
+      .select(
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
+      )
+      .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const roundedQuotations = quotations.map((qt) => ({
+      ...qt.toObject(),
+      amount: roundUp(qt.amount),
+      discount: roundUp(qt.discount),
+      fee: roundUp(qt.fee),
+      calFee: roundUp(qt.calFee),
+      totalBeforeFee: roundUp(qt.totalBeforeFee),
+      total: roundUp(qt.total),
+      amountBeforeTax: roundUp(qt.amountBeforeTax),
+      vat: roundUp(qt.vat),
+      netAmount: roundUp(qt.netAmount),
+    }));
+
+    res.status(200).json({
+      data: roundedQuotations,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (error) {
+    console.error("Error fetching paginated quotations by email:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // ✅ ดึง Quotation ตาม Email ของ createdByUser
 exports.getQuotationsByEmail = async (req, res) => {
   const { email } = req.params;

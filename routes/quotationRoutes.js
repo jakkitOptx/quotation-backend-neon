@@ -333,6 +333,9 @@ router.get("/search", async (req, res) => {
   }
 });
 
+// ดึง qt by email สำหรับแสดงหน้าจอเร็ว ๆ (แค่ 10–20 รายการแรก)
+router.get('/by-email/:email/paginated', quotationController.getQuotationsByEmailPaginated);
+
 // ดึง qt by email
 router.get("/by-email/:email", quotationController.getQuotationsByEmail);
 
