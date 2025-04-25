@@ -10,7 +10,14 @@ const roundUp = (num) => {
 
 // ✅ สร้างใบ Quotation ใหม่
 exports.createQuotation = async (req, res) => {
-  const { title, amount, allocation = null, description = null, type = "M" , isDetailedForm = false} = req.body;
+  const {
+    title,
+    amount,
+    allocation = null,
+    description = null,
+    type = "M",
+    isDetailedForm = false,
+  } = req.body;
 
   try {
     if (!title || amount == null) {
@@ -21,7 +28,9 @@ exports.createQuotation = async (req, res) => {
     const roundedAmount = roundUp(amount);
 
     // ✅ ตรวจสอบเลขรันล่าสุดของ type
-    const lastQuotation = await Quotation.findOne({ type }).sort({ runNumber: -1 });
+    const lastQuotation = await Quotation.findOne({ type }).sort({
+      runNumber: -1,
+    });
     const newRunNumber = lastQuotation
       ? String(Number(lastQuotation.runNumber) + 1).padStart(3, "0")
       : "001";
@@ -63,7 +72,10 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
       .select(
         "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
       )
-      .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber")
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      )
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -101,10 +113,14 @@ exports.getQuotationsByEmail = async (req, res) => {
     }
 
     const quotations = await Quotation.find({ createdByUser: email })
+      .sort({ createdAt: -1 })
       .select(
         "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
       )
-      .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber"); // ✅ เพิ่มการดึงข้อมูลลูกค้า
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      ); // ✅ เพิ่มการดึงข้อมูลลูกค้า
 
     // ✅ ปัดเศษค่าตัวเลขให้ถูกต้องก่อนส่งกลับ
     const roundedQuotations = quotations.map((qt) => ({
@@ -139,7 +155,10 @@ exports.getQuotationsWithPagination = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber")
+        .populate(
+          "clientId",
+          "customerName address taxIdentificationNumber contactPhoneNumber"
+        )
         .populate({
           path: "approvalHierarchy",
           select: "quotationId approvalHierarchy",
@@ -148,7 +167,7 @@ exports.getQuotationsWithPagination = async (req, res) => {
             select: "level approver status",
           },
         }),
-      Quotation.countDocuments()
+      Quotation.countDocuments(),
     ]);
 
     res.status(200).json({
@@ -163,7 +182,6 @@ exports.getQuotationsWithPagination = async (req, res) => {
   }
 };
 
-
 // ✅ ดึง Quotation ที่ต้อง Approve ตาม Email และ return reason ด้วย
 exports.getApprovalQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
@@ -174,10 +192,14 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
     }
 
     const quotations = await Quotation.find()
+      .sort({ createdAt: -1 })
       .select(
         "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus reason remark CreditTerm approvalHierarchy"
       )
-      .populate("clientId", "customerName address taxIdentificationNumber contactPhoneNumber") // ✅ เพิ่มข้อมูลลูกค้า
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      ) // ✅ เพิ่มข้อมูลลูกค้า
       .populate({
         path: "approvalHierarchy",
         select: "quotationId approvalHierarchy",
@@ -188,7 +210,8 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
       });
 
     const filteredQuotations = quotations.filter((qt) => {
-      if (!qt.approvalHierarchy || qt.approvalHierarchy.length === 0) return false;
+      if (!qt.approvalHierarchy || qt.approvalHierarchy.length === 0)
+        return false;
       const hierarchy = qt.approvalHierarchy[0]?.approvalHierarchy || [];
       return hierarchy.some((level) => level.approver === email);
     });
@@ -253,7 +276,9 @@ exports.resetQuotation = async (req, res) => {
     const approval = await Approval.findOne({ quotationId: id });
 
     if (!approval) {
-      return res.status(404).json({ message: "Approval flow not found for this quotation" });
+      return res
+        .status(404)
+        .json({ message: "Approval flow not found for this quotation" });
     }
 
     approval.approvalHierarchy = approval.approvalHierarchy.map((level) => ({

@@ -132,10 +132,11 @@ router.post("/", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const quotations = await Quotation.find()
+      .sort({ createdAt: -1 }) // 🔹 เรียงจากใหม่ → เก่า
       .populate(
         "clientId",
         "customerName address taxIdentificationNumber contactPhoneNumber"
-      ) // ✅ ดึงข้อมูลลูกค้าครบถ้วน
+      )
       .populate({
         path: "approvalHierarchy",
         select: "quotationId approvalHierarchy",
@@ -150,6 +151,7 @@ router.get("/", async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
 
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
