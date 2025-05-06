@@ -26,6 +26,7 @@ app.use(express.json()); // สำหรับ parse JSON request body
 app.use(cors(corsOptions)); // ✅ ใช้ corsOptions เพื่อกำหนด Origin ที่อนุญาต
 app.use(morgan("dev")); // สำหรับ log request (ช่วย debug)
 
+
 // เชื่อมต่อ MongoDB
 mongoose
   .connect(process.env.MONGO_URI, {
@@ -50,6 +51,9 @@ const clientRoutes = require("./routes/clientRoutes");
 const companyRoutes = require("./routes/companyRoutes");
 const driveRoutes = require("./routes/driveRoutes");
 const approveFlowRoutes = require("./routes/approveFlowRoutes");
+const uploadRoutes = require('./routes/uploadRoutes'); // ✅ ดึงไฟล์ uploadRoutes
+const teamRoutes = require("./routes/teamRoutes");
+const departmentRoutes = require("./routes/departmentRoutes");
 
 // Routes
 app.use("/api/quotations", quotationRoutes);
@@ -61,6 +65,9 @@ app.use("/api/clients", clientRoutes);
 app.use("/api/companies", companyRoutes);
 app.use("/api/drive", driveRoutes);
 app.use("/api/approve-flows", approveFlowRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use("/api/teams", teamRoutes);
+app.use("/api/departments", departmentRoutes);
 
 // Health Check Endpoint
 app.get("/", (req, res) => {
