@@ -102,7 +102,6 @@ exports.login = async (req, res) => {
     console.log("✅ Stored Password (Hashed):", user.password);
     console.log("🔹 Input Password:", password);
 
-    // ตรวจสอบรหัสผ่าน
     const isMatch = await bcrypt.compare(password, user.password);
     console.log("🔹 Password Match:", isMatch);
 
@@ -110,7 +109,6 @@ exports.login = async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // ✅ สร้าง JWT ที่มีอายุ 5 ชั่วโมง
     const token = jwt.sign(
       {
         userId: user._id,
@@ -121,9 +119,12 @@ exports.login = async (req, res) => {
         department: user.department,
         position: user.position,
         flow: user.flow,
+        team: user.team,
+        teamGroup: user.teamGroup,
+        teamRole: user.teamRole,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "5h" } // 🔹 กำหนดให้ JWT หมดอายุภายใน 5 ชั่วโมง
+      { expiresIn: "5h" }
     );
 
     res.status(200).json({
@@ -138,8 +139,11 @@ exports.login = async (req, res) => {
         position: user.position,
         role: user.role,
         flow: user.flow,
+        team: user.team,
+        teamGroup: user.teamGroup,
+        teamRole: user.teamRole,
       },
-      expiresIn: 5 * 60 * 60 // ✅ ส่งค่าหมดอายุเป็นวินาที (5 ชั่วโมง)
+      expiresIn: 5 * 60 * 60
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
