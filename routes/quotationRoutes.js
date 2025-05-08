@@ -128,11 +128,19 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId`
+// ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId` และรองรับ query `year`
 router.get("/", async (req, res) => {
   try {
-    const quotations = await Quotation.find()
-      .sort({ createdAt: -1 }) // 🔹 เรียงจากใหม่ → เก่า
+    const { year } = req.query;
+
+    const selectedYear = year || new Date().getFullYear(); // 🟢 ใช้ปีปัจจุบันถ้าไม่ได้ส่งมา
+    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
+    const end = new Date(`${+selectedYear + 1}-01-01T00:00:00.000Z`);
+
+    const quotations = await Quotation.find({
+      documentDate: { $gte: start, $lt: end },
+    })
+      .sort({ createdAt: -1 })
       .populate(
         "clientId",
         "customerName address taxIdentificationNumber contactPhoneNumber"
