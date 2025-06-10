@@ -141,13 +141,13 @@ exports.createQuotation = async (req, res) => {
   }
 };
 
-// ✅ ดึง Quotation ตาม email พร้อมแบ่งหน้า และรองรับ query ปี
+// ✅ ดึง Quotation ตาม email พร้อมแบ่งหน้า และรองรับ query ปี + รองรับ department
 exports.getQuotationsByEmailPaginated = async (req, res) => {
   const { email } = req.params;
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const skip = (page - 1) * limit;
-  const { year } = req.query;
+  const { year, department } = req.query;
 
   try {
     if (!email) {
@@ -159,16 +159,22 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
 
+    // ✅ สร้าง query object
     const query = {
       createdByUser: email,
       documentDate: { $gte: start, $lt: end },
     };
 
+    // ✅ ถ้ามี department → ใส่เพิ่มใน query
+    if (department) {
+      query.department = department;
+    }
+
     const total = await Quotation.countDocuments(query);
 
     const quotations = await Quotation.find(query)
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
       )
       .populate(
         "clientId",
@@ -203,10 +209,11 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
   }
 };
 
-// ✅ ดึง Quotation ตาม Email ของ createdByUser และกรองตามปี (default ปีปัจจุบัน)
+
+// ✅ ดึง Quotation ตาม Email ของ createdByUser และกรองตามปี (default ปีปัจจุบัน) + รองรับ filter department
 exports.getQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
-  const { year } = req.query;
+  const { year, department } = req.query;
 
   try {
     if (!email) {
@@ -218,15 +225,21 @@ exports.getQuotationsByEmail = async (req, res) => {
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
 
+    // ✅ สร้าง query object
     const query = {
       createdByUser: email,
       documentDate: { $gte: start, $lt: end },
     };
 
+    // ✅ ถ้ามี department → ใส่เพิ่มใน query
+    if (department) {
+      query.department = department;
+    }
+
     const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
       )
       .populate(
         "clientId",
@@ -254,13 +267,13 @@ exports.getQuotationsByEmail = async (req, res) => {
   }
 };
 
-// ✅ ดึงใบเสนอราคาแบบแบ่งหน้า พร้อม client และรองรับปี (default = ปีปัจจุบัน)
+// ✅ ดึงใบเสนอราคาแบบแบ่งหน้า พร้อม client และรองรับปี (default = ปีปัจจุบัน) + รองรับ department
 exports.getQuotationsWithPagination = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const { year } = req.query;
+    const { year, department } = req.query;
 
     const query = {};
 
@@ -269,6 +282,11 @@ exports.getQuotationsWithPagination = async (req, res) => {
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
     query.documentDate = { $gte: start, $lt: end };
+
+    // ✅ ถ้ามี department → ใส่เพิ่มใน query
+    if (department) {
+      query.department = department;
+    }
 
     const [quotations, total] = await Promise.all([
       Quotation.find(query)
