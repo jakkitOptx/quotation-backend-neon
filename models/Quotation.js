@@ -45,6 +45,7 @@ const QuotationSchema = new mongoose.Schema({
   createBy: { type: String, required: true }, // ผู้สร้างเอกสาร
   proposedBy: { type: String, required: true }, // ผู้เสนอเอกสาร
   createdByUser: { type: String, required: true }, // ผู้ใช้งานที่สร้างเอกสาร
+  department: { type: String, default: "" },
   discount: { type: Number, default: 0 }, // ส่วนลด
   fee: { type: Number, default: 0 }, // ค่า fee default เป็น 0
   calFee: { type: Number, default: 0 }, // ค่าคำนวนจาก amount * fee / 100

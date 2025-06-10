@@ -1,6 +1,8 @@
+// quotationRoutes.js
 const express = require("express");
 const router = express.Router();
 const Quotation = require("../models/Quotation");
+// const User = require("../models/User");
 const quotationController = require("../controllers/quotationController");
 const _ = require("lodash");
 
@@ -10,136 +12,28 @@ const roundUp = (num) => {
 };
 
 // ✅ สร้างใบเสนอราคา พร้อม `clientId` และตรวจสอบ runNumber ที่หายไป
-router.post("/", async (req, res) => {
-  const {
-    title,
-    client,
-    clientId,
-    salePerson,
-    documentDate,
-    productName,
-    projectName,
-    period,
-    startDate,
-    endDate,
-    createBy,
-    proposedBy,
-    createdByUser,
-    type = "M",
-    items,
-    discount = 0,
-    fee = 0,
-    remark = "",
-    CreditTerm = 0,
-    isDetailedForm = false,
-  } = req.body;
+router.post("/", quotationController.createQuotation);
 
-  try {
-    if (!clientId) {
-      return res.status(400).json({ message: "Client ID is required" });
-    }
-
-    if (!items || items.length === 0) {
-      return res.status(400).json({ message: "Items must not be empty" });
-    }
-
-    if (!createdByUser) {
-      return res.status(400).json({ message: "Created By User is required" });
-    }
-
-    let totalBeforeFee = 0;
-    const processedItems = items.map((item, index) => {
-      const unit = Number(item.unit) || 0;
-      const unitPrice = roundUp(parseFloat(item.unitPrice) || 0);
-      const amount = roundUp(unit * unitPrice);
-
-      if (!item.description) {
-        throw new Error(`Item at index ${index} is missing a description.`);
-      }
-
-      totalBeforeFee += amount;
-      return { ...item, unitPrice, amount };
-    });
-
-    const calFee = roundUp(totalBeforeFee * (fee / 100));
-    const total = roundUp(totalBeforeFee + calFee);
-    const amountBeforeTax = roundUp(total - discount);
-    const vat = roundUp(amountBeforeTax * 0.07);
-    const netAmount = roundUp(amountBeforeTax + vat);
-
-    // ✅ หา runNumber ที่ว่างอยู่ใน type นั้น และเริ่มจากค่าใน .env
-    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
-    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
-
-    const existingQuotations = await Quotation.find({ type }).select(
-      "runNumber"
-    );
-    const existingRunNumbers = existingQuotations.map((q) =>
-      Number(q.runNumber)
-    );
-
-    let newRunNumber = "001";
-    for (let i = startRunNumber; i <= 999; i++) {
-      if (!existingRunNumbers.includes(i)) {
-        newRunNumber = String(i).padStart(3, "0");
-        break;
-      }
-    }
-
-    const quotation = new Quotation({
-      title,
-      client,
-      clientId,
-      salePerson,
-      documentDate,
-      productName,
-      projectName,
-      period,
-      startDate,
-      endDate,
-      createBy,
-      proposedBy,
-      createdByUser,
-      allocation: null,
-      description: null,
-      amount: roundUp(totalBeforeFee),
-      totalBeforeFee,
-      total,
-      discount: roundUp(discount),
-      fee: roundUp(fee),
-      calFee,
-      amountBeforeTax,
-      vat,
-      netAmount,
-      type,
-      runNumber: newRunNumber,
-      items: processedItems,
-      approvalStatus: "Pending",
-      remark,
-      CreditTerm,
-      isDetailedForm,
-    });
-
-    await quotation.save();
-    res.status(201).json(quotation);
-  } catch (error) {
-    console.error("Error creating quotation:", error);
-    res.status(400).json({ message: error.message });
-  }
-});
-
-// ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId` และรองรับ query `year`
+// ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId` และรองรับ query `year` + `department`
 router.get("/", async (req, res) => {
   try {
-    const { year } = req.query;
+    const { year, department } = req.query;
 
     const selectedYear = year || new Date().getFullYear(); // 🟢 ใช้ปีปัจจุบันถ้าไม่ได้ส่งมา
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${+selectedYear + 1}-01-01T00:00:00.000Z`);
 
-    const quotations = await Quotation.find({
+    // ✅ สร้าง query object
+    const query = {
       documentDate: { $gte: start, $lt: end },
-    })
+    };
+
+    // ✅ ถ้ามี department → ใส่เพิ่มใน query
+    if (department) {
+      query.department = department;
+    }
+
+    const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
       .populate(
         "clientId",
@@ -164,12 +58,12 @@ router.get("/", async (req, res) => {
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
 
-// ดึงใบเสนอราคาเดี่ยว
+// ✅ ดึงใบเสนอราคาเดี่ยว พร้อม field department
 router.get("/:id", async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
       )
       .populate({
         path: "approvalHierarchy",
@@ -182,7 +76,7 @@ router.get("/:id", async (req, res) => {
       .populate(
         "clientId",
         "customerName address taxIdentificationNumber contactPhoneNumber"
-      ); // เพิ่มการ populate clientId
+      ); // ✅ เพิ่มการ populate clientId
 
     if (!quotation) {
       return res.status(404).json({ message: "Quotation not found" });

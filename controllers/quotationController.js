@@ -2,55 +2,142 @@
 const _ = require("lodash"); // ✅ Import lodash
 const Approval = require("../models/Approval");
 const Quotation = require("../models/Quotation");
+const User = require("../models/User");
+
 
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
   return (num * 100) % 1 >= 0.5 ? _.ceil(num, 2) : _.round(num, 2);
 };
 
-// ✅ สร้างใบ Quotation ใหม่
+// ✅ สร้างใบ Quotation ใหม่ (version ใส่ department + เงื่อนไขครบ)
 exports.createQuotation = async (req, res) => {
   const {
     title,
-    amount,
-    allocation = null,
-    description = null,
+    client,
+    clientId,
+    salePerson,
+    documentDate,
+    productName,
+    projectName,
+    period,
+    startDate,
+    endDate,
+    createBy,
+    proposedBy,
+    createdByUser, // ✅ ต้องมีเพื่อ lookup department
     type = "M",
+    items,
+    discount = 0,
+    fee = 0,
+    remark = "",
+    CreditTerm = 0,
     isDetailedForm = false,
   } = req.body;
 
   try {
-    if (!title || amount == null) {
-      return res.status(400).json({ message: "Title and amount are required" });
+    // ✅ Validate parameter ที่จำเป็น
+    if (!clientId) {
+      return res.status(400).json({ message: "Client ID is required" });
     }
 
-    // ✅ ปัดเศษ amount ตามกฎที่กำหนด
-    const roundedAmount = roundUp(amount);
+    if (!items || items.length === 0) {
+      return res.status(400).json({ message: "Items must not be empty" });
+    }
 
-    // ✅ ตรวจสอบเลขรันล่าสุดของ type
-    const lastQuotation = await Quotation.findOne({ type }).sort({
-      runNumber: -1,
+    if (!createdByUser) {
+      return res.status(400).json({ message: "Created By User is required" });
+    }
+
+    // ✅ หา User เพื่อนำ department มาใส่ Quotation
+    const user = await User.findOne({ username: createdByUser });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // ✅ คำนวณรายการ item
+    let totalBeforeFee = 0;
+    const processedItems = items.map((item, index) => {
+      const unit = Number(item.unit) || 0;
+      const unitPrice = roundUp(parseFloat(item.unitPrice) || 0);
+      const amount = roundUp(unit * unitPrice);
+
+      if (!item.description) {
+        throw new Error(`Item at index ${index} is missing a description.`);
+      }
+
+      totalBeforeFee += amount;
+      return { ...item, unitPrice, amount };
     });
-    const newRunNumber = lastQuotation
-      ? String(Number(lastQuotation.runNumber) + 1).padStart(3, "0")
-      : "001";
 
-    // ✅ สร้าง Quotation ใหม่
+    // ✅ คำนวณ fee, total, amountBeforeTax, vat, netAmount
+    const calFee = roundUp(totalBeforeFee * (fee / 100));
+    const total = roundUp(totalBeforeFee + calFee);
+    const amountBeforeTax = roundUp(total - discount);
+    const vat = roundUp(amountBeforeTax * 0.07);
+    const netAmount = roundUp(amountBeforeTax + vat);
+
+    // ✅ หา runNumber ที่ว่างอยู่ใน type นั้น และเริ่มจากค่าใน .env
+    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
+
+    const existingQuotations = await Quotation.find({ type }).select(
+      "runNumber"
+    );
+    const existingRunNumbers = existingQuotations.map((q) =>
+      Number(q.runNumber)
+    );
+
+    let newRunNumber = "001";
+    for (let i = startRunNumber; i <= 999; i++) {
+      if (!existingRunNumbers.includes(i)) {
+        newRunNumber = String(i).padStart(3, "0");
+        break;
+      }
+    }
+
+    // ✅ สร้าง Quotation ใหม่ (ข้อมูลครบ)
     const quotation = new Quotation({
       title,
-      amount: roundedAmount,
-      allocation,
-      description,
-      runNumber: newRunNumber,
+      client,
+      clientId,
+      salePerson,
+      documentDate,
+      productName,
+      projectName,
+      period,
+      startDate,
+      endDate,
+      createBy,
+      proposedBy,
+      createdByUser,
+      department: user.department, // ✅ ใส่ department
+      allocation: null,
+      description: null,
+      amount: roundUp(totalBeforeFee),
+      totalBeforeFee,
+      total,
+      discount: roundUp(discount),
+      fee: roundUp(fee),
+      calFee,
+      amountBeforeTax,
+      vat,
+      netAmount,
       type,
+      runNumber: newRunNumber,
+      items: processedItems,
+      approvalStatus: "Pending",
+      remark,
+      CreditTerm,
+      isDetailedForm,
     });
 
     await quotation.save();
 
     res.status(201).json(quotation);
   } catch (error) {
-    console.error("Error creating quotation:", error.message);
-    res.status(500).json({ message: error.message });
+    console.error("Error creating quotation:", error);
+    res.status(400).json({ message: error.message });
   }
 };
 
