@@ -4,7 +4,6 @@ const Approval = require("../models/Approval");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 
-
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
   return (num * 100) % 1 >= 0.5 ? _.ceil(num, 2) : _.round(num, 2);
@@ -112,6 +111,8 @@ exports.createQuotation = async (req, res) => {
       proposedBy,
       createdByUser,
       department: user.department, // ✅ ใส่ department
+      team: user.team || "", // ✅ ใส่ team (จะมีหรือไม่มีก็ OK)
+      teamGroup: user.teamGroup || "", // ✅ ใส่ teamGroup (จะมีหรือไม่มีก็ OK)
       allocation: null,
       description: null,
       amount: roundUp(totalBeforeFee),
@@ -141,48 +142,101 @@ exports.createQuotation = async (req, res) => {
   }
 };
 
+exports.getQuotations = async (req, res) => {
+  try {
+    const { year, email } = req.query;
+    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
+    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
+
+    const query = {
+      documentDate: { $gte: start, $lt: end },
+    };
+
+    if (email) {
+      const user = await User.findOne({ username: email });
+      console.log("user.teamGroup getQuotations==>", user.teamGroup);
+      if (user.role !== "admin") {
+        if (user.level >= 3) {
+          query.department = user.department;
+        } else if (user.level === 2) {
+          query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+        } else {
+          query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
+        }
+      }
+    }
+
+    const quotations = await Quotation.find(query)
+      .sort({ createdAt: -1 })
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      )
+      .populate({
+        path: "approvalHierarchy",
+        select: "quotationId approvalHierarchy",
+        populate: {
+          path: "approvalHierarchy",
+          select: "level approver status",
+        },
+      });
+
+    res.status(200).json(quotations);
+  } catch (error) {
+    console.error("Error fetching quotations:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
 // ✅ ดึง Quotation ตาม email พร้อมแบ่งหน้า และรองรับ query ปี + รองรับ department
 exports.getQuotationsByEmailPaginated = async (req, res) => {
   const { email } = req.params;
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const skip = (page - 1) * limit;
-  const { year, department } = req.query;
+  const { year } = req.query;
 
   try {
     if (!email) {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    // ✅ กำหนดช่วงวันที่ตามปี (ถ้าไม่ส่งมา → ใช้ปีปัจจุบัน)
+    const user = await User.findOne({ username: email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
     const selectedYear = year ? parseInt(year) : new Date().getFullYear();
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
 
-    // ✅ สร้าง query object
     const query = {
-      createdByUser: email,
       documentDate: { $gte: start, $lt: end },
     };
-
-    // ✅ ถ้ามี department → ใส่เพิ่มใน query
-    if (department) {
-      query.department = department;
+    console.log(
+      "user.teamGroup getQuotationsByEmailPaginated ==>",
+      user.teamGroup
+    );
+    if (user.role !== "admin") {
+      if (user.level >= 3) {
+        query.department = user.department;
+      } else if (user.level === 2) {
+        query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+      } else {
+        query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
+      }
     }
 
     const total = await Quotation.countDocuments(query);
 
     const quotations = await Quotation.find(query)
-      .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
-      )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
       .populate(
         "clientId",
         "customerName address taxIdentificationNumber contactPhoneNumber"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+      );
 
     const roundedQuotations = quotations.map((qt) => ({
       ...qt.toObject(),
@@ -209,44 +263,45 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
   }
 };
 
-
-// ✅ ดึง Quotation ตาม Email ของ createdByUser และกรองตามปี (default ปีปัจจุบัน) + รองรับ filter department
+// ✅ ดึง Quotation ตาม Email ของ User และกรองตามปี (default ปีปัจจุบัน) + รองรับ role filter
 exports.getQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
-  const { year, department } = req.query;
+  const { year } = req.query;
 
   try {
     if (!email) {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    // ✅ กำหนดปี (ถ้าไม่ส่งมาใช้ปีปัจจุบัน)
+    const user = await User.findOne({ username: email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
     const selectedYear = year ? parseInt(year) : new Date().getFullYear();
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
 
-    // ✅ สร้าง query object
     const query = {
-      createdByUser: email,
       documentDate: { $gte: start, $lt: end },
     };
-
-    // ✅ ถ้ามี department → ใส่เพิ่มใน query
-    if (department) {
-      query.department = department;
+    if (user.role !== "admin") {
+      if (user.level >= 3) {
+        query.department = user.department;
+      } else if (user.level === 2) {
+        query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+      } else {
+        query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
+      }
     }
 
     const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
-      .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
-      )
       .populate(
         "clientId",
         "customerName address taxIdentificationNumber contactPhoneNumber"
       );
 
-    // ✅ ปัดเศษค่าตัวเลขก่อนส่งกลับ
     const roundedQuotations = quotations.map((qt) => ({
       ...qt.toObject(),
       amount: roundUp(qt.amount),
@@ -273,19 +328,32 @@ exports.getQuotationsWithPagination = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const { year, department } = req.query;
+    const { year, email } = req.query;
 
-    const query = {};
-
-    // ✅ ถ้าไม่ส่ง year มา → ใช้ปีปัจจุบันแทน
     const selectedYear = year ? parseInt(year) : new Date().getFullYear();
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
-    query.documentDate = { $gte: start, $lt: end };
 
-    // ✅ ถ้ามี department → ใส่เพิ่มใน query
-    if (department) {
-      query.department = department;
+    const query = {
+      documentDate: { $gte: start, $lt: end },
+    };
+
+    if (email) {
+      const user = await User.findOne({ username: email });
+      console.log(
+        "user.teamGroup getQuotationsWithPagination ==>",
+        user.teamGroup
+      );
+
+      if (user.role !== "admin") {
+        if (user.level >= 3) {
+          query.department = user.department;
+        } else if (user.level === 2) {
+          query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+        } else {
+          query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
+        }
+      }
     }
 
     const [quotations, total] = await Promise.all([
@@ -320,16 +388,23 @@ exports.getQuotationsWithPagination = async (req, res) => {
   }
 };
 
-// ✅ ดึง Quotation ที่ต้อง Approve ตาม Email และ return reason ด้วย
+// ✅ ดึง Quotation ที่ต้อง Approve ตาม Email และรองรับ filter by year ด้วย
 exports.getApprovalQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
+  const { year } = req.query;
 
   try {
     if (!email) {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    const quotations = await Quotation.find()
+    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
+    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
+
+    const quotations = await Quotation.find({
+      documentDate: { $gte: start, $lt: end }, // ✅ filter by year
+    })
       .sort({ createdAt: -1 })
       .select(
         "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus reason remark CreditTerm approvalHierarchy"
@@ -337,7 +412,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
       .populate(
         "clientId",
         "customerName address taxIdentificationNumber contactPhoneNumber"
-      ) // ✅ เพิ่มข้อมูลลูกค้า
+      )
       .populate({
         path: "approvalHierarchy",
         select: "quotationId approvalHierarchy",
@@ -347,6 +422,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
         },
       });
 
+    // ✅ filter ที่ต้อง approve โดย email นี้
     const filteredQuotations = quotations.filter((qt) => {
       if (!qt.approvalHierarchy || qt.approvalHierarchy.length === 0)
         return false;

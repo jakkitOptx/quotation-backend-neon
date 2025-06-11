@@ -14,45 +14,8 @@ const roundUp = (num) => {
 // ✅ สร้างใบเสนอราคา พร้อม `clientId` และตรวจสอบ runNumber ที่หายไป
 router.post("/", quotationController.createQuotation);
 
-// ✅ ดึงใบเสนอราคาทั้งหมด พร้อมข้อมูล `clientId` และรองรับ query `year` + `department`
-router.get("/", async (req, res) => {
-  try {
-    const { year, department } = req.query;
-
-    const selectedYear = year || new Date().getFullYear(); // 🟢 ใช้ปีปัจจุบันถ้าไม่ได้ส่งมา
-    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
-    const end = new Date(`${+selectedYear + 1}-01-01T00:00:00.000Z`);
-
-    // ✅ สร้าง query object
-    const query = {
-      documentDate: { $gte: start, $lt: end },
-    };
-
-    // ✅ ถ้ามี department → ใส่เพิ่มใน query
-    if (department) {
-      query.department = department;
-    }
-
-    const quotations = await Quotation.find(query)
-      .sort({ createdAt: -1 })
-      .populate(
-        "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
-      )
-      .populate({
-        path: "approvalHierarchy",
-        select: "quotationId approvalHierarchy",
-        populate: {
-          path: "approvalHierarchy",
-          select: "level approver status",
-        },
-      });
-
-    res.status(200).json(quotations);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+// ✅ ดึงใบเสนอราคาทั้งหมด พร้อม query year + email → ให้ controller จัดการ filter
+router.get("/", quotationController.getQuotations);
 
 
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
