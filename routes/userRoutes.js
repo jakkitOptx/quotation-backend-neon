@@ -12,4 +12,7 @@ router.get("/:id", userController.getUserById);
 // ✅ อัปเดตข้อมูลส่วนตัวของผู้ใช้
 router.patch("/:id", userController.updateUserProfile);
 
+// ✅ ลบ User
+router.delete("/:id", userController.deleteUser);
+
 module.exports = router;
