@@ -61,10 +61,10 @@ exports.getClientById = async (req, res) => {
 // Get All Clients
 exports.getAllClients = async (req, res) => {
   try {
-    const clients = await Client.find();
+    const clients = await Client.find().collation({ locale: "th", strength: 1 }).sort({ customerName: 1 });
     res.status(200).json(clients);
   } catch (error) {
     console.error("Error fetching clients:", error);
-    res.status(500).json({ message: "Failed to fetch clients", error });
+    res.status(500).json({ message: "Server Error" });
   }
 };
