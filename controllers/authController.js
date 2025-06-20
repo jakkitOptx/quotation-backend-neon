@@ -1,9 +1,9 @@
 // authController.js
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const crypto = require('crypto');
-const User = require('../models/User');
-const nodemailer = require('nodemailer');
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
+const User = require("../models/User");
+const nodemailer = require("nodemailer");
 
 // ลงทะเบียน (Register)
 exports.register = async (req, res) => {
@@ -14,54 +14,81 @@ exports.register = async (req, res) => {
     }
 
     // ค้นหาว่ามี username ไหนที่ซ้ำกันบ้างก่อนจะ insert
-    const existingUsersInDB = await User.find({ username: { $in: users.map(u => u.username) } });
-    const existingUsernames = existingUsersInDB.map(user => user.username);
-    
+    const existingUsersInDB = await User.find({
+      username: { $in: users.map((u) => u.username) },
+    });
+    const existingUsernames = existingUsersInDB.map((user) => user.username);
+
     // กรองเฉพาะผู้ใช้ใหม่ที่ยังไม่อยู่ในระบบ และแฮช password
-    const usersToInsert = await Promise.all(users
-      .filter(user => !existingUsernames.includes(user.username))
-      .map(async userData => {
-        const { firstName, lastName, username, password, level, department, position, role } = userData;
+    const usersToInsert = await Promise.all(
+      users
+        .filter((user) => !existingUsernames.includes(user.username))
+        .map(async (userData) => {
+          const {
+            firstName,
+            lastName,
+            username,
+            password,
+            level,
+            department,
+            position,
+            role,
+          } = userData;
 
-        // ดึง domain จาก username และแปลงเป็น company
-        const domain = username.split("@")[1]?.split(".")[0];
-        const company = domain === "neonworks" ? "Neon" : domain === "optx" ? "Optx" : "Unknown";
+          // ดึง domain จาก username และแปลงเป็น company
+          const domain = username.split("@")[1]?.split(".")[0];
+          const company =
+            domain === "neonworks"
+              ? "Neon"
+              : domain === "optx"
+              ? "Optx"
+              : "Unknown";
 
-        // ตรวจสอบ role ว่าถูกต้องหรือไม่
-        const assignedRole = role && ["admin", "manager", "user"].includes(role.toLowerCase()) 
-          ? role.toLowerCase() 
-          : "user"; 
+          // ตรวจสอบ role ว่าถูกต้องหรือไม่
+          const assignedRole =
+            role && ["admin", "manager", "user"].includes(role.toLowerCase())
+              ? role.toLowerCase()
+              : "user";
 
-        // ✅ แฮชรหัสผ่านก่อนบันทึก
-        const hashedPassword = await bcrypt.hash(password, 10);
+          // ✅ แฮชรหัสผ่านก่อนบันทึก
+          const hashedPassword = await bcrypt.hash(password, 10);
 
-        return {
-          firstName,
-          lastName,
-          username,
-          password: hashedPassword, // ✅ บันทึก password แบบเข้ารหัส
-          level: level || 1,
-          company,
-          department: department || "N/A",
-          position: position || "N/A",
-          role: assignedRole,
-          flow: null,
-        };
-      })
+          return {
+            firstName,
+            lastName,
+            username,
+            password: hashedPassword, // ✅ บันทึก password แบบเข้ารหัส
+            level: level || 1,
+            company,
+            department: department || "N/A",
+            position: position || "N/A",
+            role: assignedRole,
+            flow: null,
+          };
+        })
     );
 
     // ถ้าไม่มีผู้ใช้ใหม่เลย
     if (usersToInsert.length === 0) {
-      return res.status(400).json({ message: "All provided emails already exist", existingUsers: existingUsernames });
+      return res.status(400).json({
+        message: "All provided emails already exist",
+        existingUsers: existingUsernames,
+      });
     }
 
     // ✅ ใช้ insertMany() เพื่อบันทึกทีเดียว
     const insertedUsers = await User.insertMany(usersToInsert);
 
     // ✅ สร้าง JWT Token สำหรับทุกคนที่สมัครใหม่
-    const tokens = insertedUsers.map(user =>
+    const tokens = insertedUsers.map((user) =>
       jwt.sign(
-        { userId: user._id, username: user.username, level: user.level, company: user.company, role: user.role },
+        {
+          userId: user._id,
+          username: user.username,
+          level: user.level,
+          company: user.company,
+          role: user.role,
+        },
         process.env.JWT_SECRET,
         { expiresIn: "3h" }
       )
@@ -69,7 +96,8 @@ exports.register = async (req, res) => {
 
     res.status(201).json({
       message: "Users registered successfully",
-      users: insertedUsers.map(user => ({
+      users: insertedUsers.map((user) => ({
+        _id: user._id, // ✅ เพิ่มตรงนี้
         firstName: user.firstName,
         lastName: user.lastName,
         username: user.username,
@@ -81,7 +109,8 @@ exports.register = async (req, res) => {
         flow: user.flow,
       })),
       tokens,
-      existingUsers: existingUsernames.length > 0 ? existingUsernames : undefined,
+      existingUsers:
+        existingUsernames.length > 0 ? existingUsernames : undefined,
     });
   } catch (error) {
     console.error("❌ Error registering users:", error);
@@ -143,14 +172,13 @@ exports.login = async (req, res) => {
         teamGroup: user.teamGroup,
         teamRole: user.teamRole,
       },
-      expiresIn: 5 * 60 * 60
+      expiresIn: 5 * 60 * 60,
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
-
 
 // ขอรีเซ็ตรหัสผ่าน (Request Reset Password)
 exports.requestPasswordReset = async (req, res) => {
@@ -163,11 +191,9 @@ exports.requestPasswordReset = async (req, res) => {
     }
 
     // ✅ สร้าง Reset Token
-    const resetToken = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
-    );
+    const resetToken = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "1h",
+    });
 
     user.resetToken = resetToken;
     user.resetTokenExpiry = Date.now() + 3600000; // 1 ชั่วโมง
@@ -203,7 +229,6 @@ exports.requestPasswordReset = async (req, res) => {
     res.status(200).json({
       message: "Password reset link has been sent to your email",
     });
-
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -218,14 +243,20 @@ exports.resetPassword = async (req, res) => {
     const decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
     const user = await User.findById(decoded.userId);
 
-    if (!user || user.resetToken !== resetToken || user.resetTokenExpiry < Date.now()) {
-      return res.status(400).json({ message: "Invalid or expired reset token" });
+    if (
+      !user ||
+      user.resetToken !== resetToken ||
+      user.resetTokenExpiry < Date.now()
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Invalid or expired reset token" });
     }
 
     // ✅ แฮชรหัสผ่านใหม่
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
-    
+
     // ✅ ล้างค่า resetToken
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
