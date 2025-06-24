@@ -114,8 +114,8 @@ router.patch("/:id", async (req, res) => {
       totalBeforeFee += amount;
       return { ...item, unitPrice, amount };
     });
-
-    const calFee = roundUp(totalBeforeFee * (fee / 100));
+    // แก้สูตร
+    const calFee = roundUp(fee); // เพราะค่าที่ได้มาคือจำนวนเงิน fee ตรง ๆ แล้ว
     const total = roundUp(totalBeforeFee + calFee);
     const amountBeforeTax = roundUp(total - discount);
     const vat = roundUp(amountBeforeTax * 0.07);

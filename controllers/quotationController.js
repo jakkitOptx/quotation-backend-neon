@@ -68,9 +68,9 @@ exports.createQuotation = async (req, res) => {
       totalBeforeFee += amount;
       return { ...item, unitPrice, amount };
     });
-
+    // แก้สูตร
     // ✅ คำนวณ fee, total, amountBeforeTax, vat, netAmount
-    const calFee = roundUp(totalBeforeFee * (fee / 100));
+    const calFee = roundUp(fee); // ใช้จำนวนเงิน fee ที่ถูกส่งมาจาก frontend
     const total = roundUp(totalBeforeFee + calFee);
     const amountBeforeTax = roundUp(total - discount);
     const vat = roundUp(amountBeforeTax * 0.07);
