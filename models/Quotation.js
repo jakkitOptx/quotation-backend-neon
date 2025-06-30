@@ -34,7 +34,11 @@ const QuotationSchema = new mongoose.Schema({
   // ฟิลด์ใหม่ตามข้อกำหนด
   time: { type: Date, default: Date.now }, // Timestamp
   client: { type: String, required: true }, // ชื่อลูกค้า
-  clientId: { type: mongoose.Schema.Types.ObjectId, ref: "Client", required: true }, // ✅ เพิ่ม clientId (เชื่อมกับ Client collection)
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Client",
+    required: true,
+  }, // ✅ เพิ่ม clientId (เชื่อมกับ Client collection)
   salePerson: { type: String, required: true }, // ชื่อพนักงานขาย
   documentDate: { type: Date, required: true }, // วันที่เอกสาร
   productName: { type: String, required: true }, // ชื่อสินค้า
@@ -63,6 +67,8 @@ const QuotationSchema = new mongoose.Schema({
   remark: { type: String, default: "" },
   CreditTerm: { type: Number, default: 0 },
   isDetailedForm: { type: Boolean, default: false }, // ✅ เพิ่มฟิลด์นี้เพื่อระบุประเภทฟอร์ม
+  isSpecialForm: { type: Boolean, default: false }, // ฟอร์มแบบพิเศษ
+  numberOfSpecialPages: { type: Number, default: 1 }, // จำนวนหน้าของฟอร์มแบบพิเศษ
 });
 
 // ✅ ใช้ `pre-save hook` เพื่อปัดเศษค่าตัวเลขทั้งหมดก่อนบันทึกลงฐานข้อมูล

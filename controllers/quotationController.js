@@ -32,6 +32,8 @@ exports.createQuotation = async (req, res) => {
     remark = "",
     CreditTerm = 0,
     isDetailedForm = false,
+    isSpecialForm = false,
+    numberOfSpecialPages = 1,
   } = req.body;
 
   try {
@@ -131,6 +133,8 @@ exports.createQuotation = async (req, res) => {
       remark,
       CreditTerm,
       isDetailedForm,
+      isSpecialForm,
+      numberOfSpecialPages,
     });
 
     await quotation.save();

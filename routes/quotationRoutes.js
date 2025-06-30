@@ -17,7 +17,6 @@ router.post("/", quotationController.createQuotation);
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อม query year + email → ให้ controller จัดการ filter
 router.get("/", quotationController.getQuotations);
 
-
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
 
@@ -26,8 +25,9 @@ router.get("/:id", async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages"
       )
+
       .populate({
         path: "approvalHierarchy",
         select: "quotationId approvalHierarchy",
@@ -73,6 +73,8 @@ router.patch("/:id", async (req, res) => {
     CreditTerm = 0,
     type,
     isDetailedForm,
+    isSpecialForm,
+    numberOfSpecialPages,
   } = req.body;
 
   try {
@@ -152,6 +154,8 @@ router.patch("/:id", async (req, res) => {
         runNumber,
         items: processedItems,
         isDetailedForm,
+        isSpecialForm,
+        numberOfSpecialPages,
       },
       { new: true }
     );
@@ -201,7 +205,10 @@ router.get("/search", async (req, res) => {
 });
 
 // ดึง qt by email สำหรับแสดงหน้าจอเร็ว ๆ (แค่ 10–20 รายการแรก)
-router.get('/by-email/:email/paginated', quotationController.getQuotationsByEmailPaginated);
+router.get(
+  "/by-email/:email/paginated",
+  quotationController.getQuotationsByEmailPaginated
+);
 
 // ดึง qt by email
 router.get("/by-email/:email", quotationController.getQuotationsByEmail);
