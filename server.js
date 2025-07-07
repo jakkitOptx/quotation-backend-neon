@@ -53,6 +53,7 @@ const driveRoutes = require("./routes/driveRoutes");
 const approveFlowRoutes = require("./routes/approveFlowRoutes");
 const teamRoutes = require("./routes/teamRoutes");
 const departmentRoutes = require("./routes/departmentRoutes");
+const logRoutes = require("./routes/logRoutes");
 
 // Routes
 app.use("/api/quotations", quotationRoutes);
@@ -66,6 +67,7 @@ app.use("/api/drive", driveRoutes);
 app.use("/api/approve-flows", approveFlowRoutes);
 app.use("/api/teams", teamRoutes);
 app.use("/api/departments", departmentRoutes);
+app.use("/api/logs", logRoutes);
 
 // Health Check Endpoint
 app.get("/", (req, res) => {
