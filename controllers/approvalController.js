@@ -152,6 +152,14 @@ exports.updateApproverInLevel = async (req, res) => {
     hierarchy.status = status;
     hierarchy.approvedAt = new Date();
 
+    // ✅ ตรวจสอบ prefix ของรหัส QT จากอีเมลผู้กด Approve
+    const companyPrefix = approver.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
+    const docYear = new Date(quotation.documentDate).getFullYear();
+    const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
+    const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
+
     // ✅ คำนวณและบันทึก log ตาม status
     if (status === "Canceled" && level >= 2) {
       quotation.approvalStatus = "Canceled";
@@ -162,7 +170,7 @@ exports.updateApproverInLevel = async (req, res) => {
         quotationId: quotation._id,
         action: "cancel",
         performedBy: approver,
-        description: `Level ${level} canceled by ${approver}`,
+        description: `Canceled ${qtNumber} by ${approver}`,
       });
     } else if (status === "Rejected" && level >= 2) {
       quotation.approvalStatus = "Rejected";
@@ -171,7 +179,7 @@ exports.updateApproverInLevel = async (req, res) => {
         quotationId: quotation._id,
         action: "reject",
         performedBy: approver,
-        description: `Level ${level} rejected by ${approver}`,
+        description: `${qtNumber} was rejected by ${approver}`,
       });
     } else if (status === "Approved") {
       const allApproved = approval.approvalHierarchy.every(
@@ -181,10 +189,6 @@ exports.updateApproverInLevel = async (req, res) => {
       if (allApproved) {
         quotation.approvalStatus = "Approved";
 
-        // ✅ ดึงปีจาก documentDate และรวมเลขเอกสาร
-        const docYear = new Date(quotation.documentDate).getFullYear();
-        const qtNumber = `NW-QT(${quotation.type})-${docYear}-${quotation.runNumber}`;
-
         await Log.create({
           quotationId: quotation._id,
           action: "approve",
@@ -192,11 +196,11 @@ exports.updateApproverInLevel = async (req, res) => {
           description: `${qtNumber} is fully approved.`,
         });
       } else {
-        await Log.create({
+         await Log.create({
           quotationId: quotation._id,
           action: "approve",
           performedBy: approver,
-          description: `Level ${level} approved by ${approver}`,
+          description: `Approved ${qtNumber} by ${approver}`,
         });
       }
     }

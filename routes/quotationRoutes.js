@@ -5,6 +5,7 @@ const Quotation = require("../models/Quotation");
 // const User = require("../models/User");
 const quotationController = require("../controllers/quotationController");
 const _ = require("lodash");
+const authMiddleware = require("../middlewares/authMiddleware"); // อย่าลืม import ด้วย
 
 // ✅ ฟังก์ชันปัดเศษให้เป็นทศนิยม 2 ตำแหน่ง
 const roundUp = (num) => {
@@ -295,5 +296,5 @@ router.patch("/:id/reason", async (req, res) => {
 });
 
 // ✅ API สำหรับ Reset Quotation ที่ถูก Canceled
-router.patch("/:id/reset", quotationController.resetQuotation);
+router.patch("/:id/reset", authMiddleware, quotationController.resetQuotation);
 module.exports = router;

@@ -517,11 +517,19 @@ exports.resetQuotation = async (req, res) => {
     const user = await User.findById(req.userId);
     const performedBy = user?.username || "unknown";
 
+    const companyPrefix = performedBy.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
+
+    const currentYear = new Date().getFullYear();
+    const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
+    const code = `${companyPrefix}(${quotation.type})-${currentYear}-${runFormatted}`;
+
     await Log.create({
       quotationId: quotation._id,
       action: "unlock",
       performedBy,
-      description: `Reset approval flow for Quotation ${quotation.runNumber} by ${performedBy}`,
+      description: `Reset approval flow for ${code}`,
     });
 
     res.status(200).json({
