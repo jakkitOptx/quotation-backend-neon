@@ -3,6 +3,7 @@ const _ = require("lodash"); // ✅ Import lodash
 const Approval = require("../models/Approval");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
+const Log = require("../models/Log"); // ✅ import Log model
 
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
@@ -499,6 +500,7 @@ exports.resetQuotation = async (req, res) => {
         .json({ message: "Approval flow not found for this quotation" });
     }
 
+    // ✅ Reset สถานะทุก Level
     approval.approvalHierarchy = approval.approvalHierarchy.map((level) => ({
       ...level,
       status: "Pending",
@@ -506,8 +508,21 @@ exports.resetQuotation = async (req, res) => {
     }));
 
     await approval.save();
+
+    // ✅ เปลี่ยน Quotation เป็น Pending
     quotation.approvalStatus = "Pending";
     await quotation.save();
+
+    // ✅ บันทึก Log
+    const user = await User.findById(req.userId);
+    const performedBy = user?.username || "unknown";
+
+    await Log.create({
+      quotationId: quotation._id,
+      action: "unlock",
+      performedBy,
+      description: `Reset approval flow for Quotation ${quotation.runNumber} by ${performedBy}`,
+    });
 
     res.status(200).json({
       message: "Quotation reset successfully",

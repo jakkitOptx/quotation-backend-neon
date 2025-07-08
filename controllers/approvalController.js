@@ -2,6 +2,7 @@
 const Approval = require('../models/Approval');
 const Quotation = require('../models/Quotation');
 const User = require('../models/User');
+const Log = require("../models/Log");
 
 // สร้าง Approval Hierarchy
 exports.createApprovalHierarchy = async (req, res) => {
@@ -55,7 +56,7 @@ exports.getApprovalHierarchy = async (req, res) => {
   }
 };
 
-// อัปเดตสถานะ Approve ใน Level
+// อัปเดตสถานะ Approve ใน Level **ไม่ได้ใช้ บน web**
 exports.updateApprovalStatus = async (req, res) => {
   const { level, status } = req.body;
 
@@ -111,81 +112,101 @@ exports.updateApproverInLevel = async (req, res) => {
   const { level, approver, status } = req.body;
 
   if (!level || !approver || !status) {
-    return res.status(400).json({ message: "Level, approver, and status are required" });
+    return res.status(400).json({
+      message: "Level, approver, and status are required",
+    });
   }
 
   try {
-    console.log("Fetching approval by ID:", req.params.id);
-
     const approval = await Approval.findById(req.params.id);
     if (!approval) {
-      console.error("Approval not found");
       return res.status(404).json({ message: "Approval not found" });
     }
 
-    console.log("Approval data:", approval);
-
-    // ✅ ค้นหา Quotation ที่เกี่ยวข้อง
     const quotation = await Quotation.findById(approval.quotationId);
     if (!quotation) {
-      console.error("Quotation not found");
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    console.log("Quotation data:", quotation);
-
-    // ✅ ตรวจสอบว่า Approver มีอยู่ใน approvalHierarchy ของ Approval
-    const approverExists = approval.approvalHierarchy.some(hierarchy => hierarchy.approver === approver);
+    const approverExists = approval.approvalHierarchy.some(
+      (hierarchy) => hierarchy.approver === approver
+    );
 
     if (!approverExists) {
-      return res.status(403).json({ message: `Approver ${approver} is not authorized for this approval` });
+      return res.status(403).json({
+        message: `Approver ${approver} is not authorized for this approval`,
+      });
     }
 
-    // ✅ ค้นหา Level ภายใน approvalHierarchy ของ Approval Document
-    let hierarchy = approval.approvalHierarchy.find(item => item.level === level && item.approver === approver);
+    const hierarchy = approval.approvalHierarchy.find(
+      (item) => item.level === level && item.approver === approver
+    );
 
     if (!hierarchy) {
-      console.error(`Approval level ${level} with approver ${approver} not found`);
-      return res.status(404).json({ message: `Approval level ${level} with approver ${approver} not found` });
+      return res.status(404).json({
+        message: `Approval level ${level} with approver ${approver} not found`,
+      });
     }
 
-    console.log("Found hierarchy:", hierarchy);
-
-    // ✅ อัปเดต Status และ Timestamp
+    // ✅ อัปเดตสถานะและเวลา
     hierarchy.status = status;
     hierarchy.approvedAt = new Date();
 
-    // ✅ คำนวณหา Level สูงสุดใน approvalHierarchy
-    const maxLevel = Math.max(...approval.approvalHierarchy.map(item => item.level));
-
-    // ✅ ตรวจสอบเงื่อนไขการ Canceled (เฉพาะ Level >= 2 เท่านั้นที่สามารถ Canceled ได้)
+    // ✅ คำนวณและบันทึก log ตาม status
     if (status === "Canceled" && level >= 2) {
       quotation.approvalStatus = "Canceled";
       quotation.cancelDate = new Date();
       quotation.canceledBy = approver;
-      console.log(`Quotation has been canceled by approver at level ${level}`);
-    }
 
-    // ✅ ตรวจสอบเงื่อนไขการ Rejected (เฉพาะ Level >= 2 เท่านั้นที่สามารถ Rejected ได้)
-    if (status === "Rejected" && level >= 2) {
+      await Log.create({
+        quotationId: quotation._id,
+        action: "cancel",
+        performedBy: approver,
+        description: `Level ${level} canceled by ${approver}`,
+      });
+    } else if (status === "Rejected" && level >= 2) {
       quotation.approvalStatus = "Rejected";
-      console.log(`Quotation has been rejected by approver at level ${level}`);
-    }
 
-    // ✅ ตรวจสอบว่า **ทุกคน Approved หรือไม่**
-    const allApproved = approval.approvalHierarchy.every(item => item.status === "Approved");
-    if (allApproved) {
-      quotation.approvalStatus = "Approved";
+      await Log.create({
+        quotationId: quotation._id,
+        action: "reject",
+        performedBy: approver,
+        description: `Level ${level} rejected by ${approver}`,
+      });
+    } else if (status === "Approved") {
+      const allApproved = approval.approvalHierarchy.every(
+        (item) => item.status === "Approved"
+      );
+
+      if (allApproved) {
+        quotation.approvalStatus = "Approved";
+
+        // ✅ ดึงปีจาก documentDate และรวมเลขเอกสาร
+        const docYear = new Date(quotation.documentDate).getFullYear();
+        const qtNumber = `NW-QT(${quotation.type})-${docYear}-${quotation.runNumber}`;
+
+        await Log.create({
+          quotationId: quotation._id,
+          action: "approve",
+          performedBy: approver,
+          description: `${qtNumber} is fully approved.`,
+        });
+      } else {
+        await Log.create({
+          quotationId: quotation._id,
+          action: "approve",
+          performedBy: approver,
+          description: `Level ${level} approved by ${approver}`,
+        });
+      }
     }
 
     await approval.save();
     await quotation.save();
 
-    console.log(`Approval updated successfully for ${approver} at level ${level} - ${status}`);
-
     res.status(200).json({
-      message: `Approval updated successfully for ${approver} at level ${level} - ${status}`,
-      approval
+      message: `Approval status updated to ${status} for ${approver} at level ${level}`,
+      approval,
     });
   } catch (error) {
     console.error("Error updating approval:", error.message);
@@ -194,7 +215,7 @@ exports.updateApproverInLevel = async (req, res) => {
 };
 
 
-// ดึงสถานะปัจจุบัน
+// ดึงสถานะปัจจุบัน **ไม่ได้ใช้ บน web**
 exports.getApprovalStatus = async (req, res) => {
   try {
     const approval = await Approval.findById(req.params.id);
@@ -212,7 +233,7 @@ exports.getApprovalStatus = async (req, res) => {
   }
 };
 
-// Reset approvalHierarchy เมื่อมีการแก้ไขจาก Level 1
+// Reset approvalHierarchy เมื่อมีการแก้ไข **ไม่ได้ใช้ บน web**
 exports.resetApprovalHierarchy = async (req, res) => {
   const { approvalHierarchy } = req.body;
 
