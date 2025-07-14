@@ -25,7 +25,7 @@ exports.createQuotation = async (req, res) => {
     endDate,
     createBy,
     proposedBy,
-    createdByUser, // ✅ ต้องมีเพื่อ lookup department
+    createdByUser,
     type = "M",
     items,
     discount = 0,
@@ -113,9 +113,9 @@ exports.createQuotation = async (req, res) => {
       createBy,
       proposedBy,
       createdByUser,
-      department: user.department, // ✅ ใส่ department
-      team: user.team || "", // ✅ ใส่ team (จะมีหรือไม่มีก็ OK)
-      teamGroup: user.teamGroup || "", // ✅ ใส่ teamGroup (จะมีหรือไม่มีก็ OK)
+      department: user.department,
+      team: user.team || "",
+      teamGroup: user.teamGroup || "",
       allocation: null,
       description: null,
       amount: roundUp(totalBeforeFee),
@@ -139,6 +139,19 @@ exports.createQuotation = async (req, res) => {
     });
 
     await quotation.save();
+    
+    // ✅ สร้าง log เมื่อสร้างใบเสนอราคาสำเร็จ
+    const companyPrefix = createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
+    const docYear = new Date(documentDate).getFullYear();
+    const runFormatted = newRunNumber;
+    const qtNumber = `${companyPrefix}(${type})-${docYear}-${runFormatted}`;
+
+    await Log.create({
+      quotationId: quotation._id,
+      action: "create",
+      performedBy: createdByUser,
+      description: `Created quotation ${qtNumber}`,
+    });
 
     res.status(201).json(quotation);
   } catch (error) {
@@ -517,9 +530,7 @@ exports.resetQuotation = async (req, res) => {
     const user = await User.findById(req.userId);
     const performedBy = user?.username || "unknown";
 
-    const companyPrefix = performedBy.includes("@optx")
-      ? "OPTX"
-      : "NW-QT";
+    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
 
     const currentYear = new Date().getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";

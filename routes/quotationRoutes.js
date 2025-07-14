@@ -2,10 +2,11 @@
 const express = require("express");
 const router = express.Router();
 const Quotation = require("../models/Quotation");
-// const User = require("../models/User");
+const Log = require("../models/Log"); // ✅ เพิ่ม Log model
+const User = require("../models/User"); // ✅ เพิ่มสำหรับ lookup
 const quotationController = require("../controllers/quotationController");
 const _ = require("lodash");
-const authMiddleware = require("../middlewares/authMiddleware"); // อย่าลืม import ด้วย
+const authMiddleware = require("../middlewares/authMiddleware"); // ✅ อย่าลืมใช้
 
 // ✅ ฟังก์ชันปัดเศษให้เป็นทศนิยม 2 ตำแหน่ง
 const roundUp = (num) => {
@@ -53,7 +54,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // ✅ อัปเดตใบเสนอราคา
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", authMiddleware, async (req, res) => {
   const {
     title,
     client,
@@ -164,6 +165,20 @@ router.patch("/:id", async (req, res) => {
     if (!updatedQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
     }
+    // ✅ เพิ่ม Log เมื่อแก้ไข Quotation
+    const user = await User.findById(req.userId);
+    const performedBy = user?.username || "unknown";
+    const docYear = new Date(documentDate).getFullYear();
+    const runFormatted = runNumber.padStart(3, "0");
+    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
+    const qtNumber = `${companyPrefix}(${type})-${docYear}-${runFormatted}`;
+
+    await Log.create({
+      quotationId: updatedQuotation._id,
+      action: "edit",
+      performedBy,
+      description: `Edited quotation ${qtNumber}`,
+    });
 
     res.status(200).json(updatedQuotation);
   } catch (error) {
@@ -173,13 +188,33 @@ router.patch("/:id", async (req, res) => {
 });
 
 // ลบใบเสนอราคา
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     const deletedQuotation = await Quotation.findByIdAndDelete(req.params.id);
     if (!deletedQuotation)
       return res.status(404).json({ message: "Quotation not found" });
+
+    // ✅ ดึงผู้ใช้ที่ลบจาก token
+    const user = await User.findById(req.userId);
+    const performedBy = user?.username || "unknown";
+
+    // ✅ จัดรูปแบบเลขใบเสนอราคา
+    const docYear = new Date(deletedQuotation.documentDate).getFullYear();
+    const runFormatted = deletedQuotation.runNumber?.padStart(3, "0") || "???";
+    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
+    const qtNumber = `${companyPrefix}(${deletedQuotation.type})-${docYear}-${runFormatted}`;
+
+    // ✅ สร้าง Log การลบ
+    await Log.create({
+      quotationId: deletedQuotation._id,
+      action: "delete",
+      performedBy,
+      description: `Deleted quotation ${qtNumber}`,
+    });
+
     res.status(204).send();
   } catch (error) {
+    console.error("Error deleting quotation:", error.message);
     res.status(500).json({ message: error.message });
   }
 });
