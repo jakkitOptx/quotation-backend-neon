@@ -553,3 +553,72 @@ exports.resetQuotation = async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
+exports.duplicateQuotation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const originalQT = await Quotation.findById(id);
+
+    if (!originalQT) {
+      return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    // ✅ ดึงข้อมูล user เพื่อเอา department, team ฯลฯ
+    const user = await User.findOne({ username: originalQT.createdByUser });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // ✅ ใช้ logic สร้าง runNumber แบบเดียวกับ createQuotation
+    const type = originalQT.type || "M";
+    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
+
+    const existingQuotations = await Quotation.find({ type }).select("runNumber");
+    const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
+
+    let newRunNumber = "001";
+    for (let i = startRunNumber; i <= 999; i++) {
+      if (!existingRunNumbers.includes(i)) {
+        newRunNumber = String(i).padStart(3, "0");
+        break;
+      }
+    }
+
+    // ✅ Duplicate โดยคัดลอกข้อมูลทุกฟิลด์ ยกเว้น _id, createdAt, updatedAt
+    const duplicatedQT = new Quotation({
+      ...originalQT.toObject(),
+      _id: undefined,
+      isNew: true,
+      runNumber: newRunNumber,
+      approvalStatus: "Pending",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      documentDate: new Date(),
+      // อัปเดตข้อมูล user ปัจจุบัน (ถ้าต้องการ)
+      department: user.department,
+      team: user.team || "",
+      teamGroup: user.teamGroup || ""
+    });
+
+    await duplicatedQT.save();
+
+    // ✅ Log การ duplicate
+    const companyPrefix = originalQT.createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
+    const docYear = new Date().getFullYear();
+    const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
+
+    await Log.create({
+      quotationId: duplicatedQT._id,
+      action: "duplicate",
+      performedBy: originalQT.createdByUser,
+      description: `Duplicated quotation from ${originalQT.runNumber} to ${qtNumber}`
+    });
+
+    res.status(201).json(duplicatedQT);
+
+  } catch (error) {
+    console.error("Error duplicating quotation:", error);
+    res.status(500).json({ message: error.message });
+  }
+};

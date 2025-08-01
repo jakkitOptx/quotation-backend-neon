@@ -332,4 +332,7 @@ router.patch("/:id/reason", async (req, res) => {
 
 // ✅ API สำหรับ Reset Quotation ที่ถูก Canceled
 router.patch("/:id/reset", authMiddleware, quotationController.resetQuotation);
+
+// ✅ Duplicate Quotation
+router.post("/:id/duplicate", quotationController.duplicateQuotation);
 module.exports = router;
