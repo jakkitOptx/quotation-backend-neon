@@ -1,7 +1,7 @@
 // approvalController.js
-const Approval = require('../models/Approval');
-const Quotation = require('../models/Quotation');
-const User = require('../models/User');
+const Approval = require("../models/Approval");
+const Quotation = require("../models/Quotation");
+const User = require("../models/User");
 const Log = require("../models/Log");
 
 // สร้าง Approval Hierarchy
@@ -48,8 +48,11 @@ exports.createApprovalHierarchy = async (req, res) => {
 // ดึงโครงสร้าง Approval Hierarchy
 exports.getApprovalHierarchy = async (req, res) => {
   try {
-    const approval = await Approval.findById(req.params.id).populate('quotationId');
-    if (!approval) return res.status(404).json({ message: 'Approval not found' });
+    const approval = await Approval.findById(req.params.id).populate(
+      "quotationId"
+    );
+    if (!approval)
+      return res.status(404).json({ message: "Approval not found" });
     res.status(200).json(approval);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -68,21 +71,31 @@ exports.updateApprovalStatus = async (req, res) => {
     }
 
     if (user.level < level) {
-      return res.status(403).json({ message: "Permission denied: Insufficient level" });
+      return res
+        .status(403)
+        .json({ message: "Permission denied: Insufficient level" });
     }
 
     // ค้นหา Approval
     const approval = await Approval.findById(req.params.id);
-    if (!approval) return res.status(404).json({ message: "Approval not found" });
+    if (!approval)
+      return res.status(404).json({ message: "Approval not found" });
 
-    const hierarchy = approval.approvalHierarchy.find((item) => item.level === level);
-    if (!hierarchy) return res.status(404).json({ message: `Approval level ${level} not found` });
+    const hierarchy = approval.approvalHierarchy.find(
+      (item) => item.level === level
+    );
+    if (!hierarchy)
+      return res
+        .status(404)
+        .json({ message: `Approval level ${level} not found` });
 
     hierarchy.status = status; // อัปเดตสถานะ
     hierarchy.approvedAt = new Date(); // บันทึก timestamp
 
     // ตรวจสอบว่าทุก Level อนุมัติครบหรือยัง
-    const allApproved = approval.approvalHierarchy.every((item) => item.status === "Approved");
+    const allApproved = approval.approvalHierarchy.every(
+      (item) => item.status === "Approved"
+    );
 
     if (allApproved) {
       // อัปเดต Quotation เป็น Approved
@@ -128,10 +141,55 @@ exports.updateApproverInLevel = async (req, res) => {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
+    // ✅ หา user แบบ lowercase
+    const user = await User.findOne({ username: approver.toLowerCase().trim() });
+
+    // ✅ ถ้าเป็น admin ให้ข้าม hierarchy ทันที
+    if (user && user.role === "admin") {
+      const companyPrefix = approver.includes("@optx") ? "OPTX" : "NW-QT";
+      const docYear = new Date(quotation.documentDate).getFullYear();
+      const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
+      const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
+
+      if (status === "Canceled") {
+        quotation.approvalStatus = "Canceled";
+        quotation.cancelDate = new Date();
+        quotation.canceledBy = approver;
+        await Log.create({
+          quotationId: quotation._id,
+          action: "cancel",
+          performedBy: approver,
+          description: `Canceled ${qtNumber} by admin override`,
+        });
+      } else if (status === "Rejected") {
+        quotation.approvalStatus = "Rejected";
+        await Log.create({
+          quotationId: quotation._id,
+          action: "reject",
+          performedBy: approver,
+          description: `${qtNumber} rejected by admin override`,
+        });
+      } else if (status === "Approved") {
+        quotation.approvalStatus = "Approved";
+        await Log.create({
+          quotationId: quotation._id,
+          action: "approve",
+          performedBy: approver,
+          description: `${qtNumber} approved by admin override`,
+        });
+      }
+
+      await quotation.save();
+      return res.status(200).json({
+        message: `Approval status updated to ${status} by admin override`,
+        approval,
+      });
+    }
+
+    // ===== ไม่ใช่ admin → ทำ logic เดิม =====
     const approverExists = approval.approvalHierarchy.some(
       (hierarchy) => hierarchy.approver === approver
     );
-
     if (!approverExists) {
       return res.status(403).json({
         message: `Approver ${approver} is not authorized for this approval`,
@@ -141,31 +199,24 @@ exports.updateApproverInLevel = async (req, res) => {
     const hierarchy = approval.approvalHierarchy.find(
       (item) => item.level === level && item.approver === approver
     );
-
     if (!hierarchy) {
       return res.status(404).json({
         message: `Approval level ${level} with approver ${approver} not found`,
       });
     }
 
-    // ✅ อัปเดตสถานะและเวลา
     hierarchy.status = status;
     hierarchy.approvedAt = new Date();
 
-    // ✅ ตรวจสอบ prefix ของรหัส QT จากอีเมลผู้กด Approve
-    const companyPrefix = approver.includes("@optx")
-      ? "OPTX"
-      : "NW-QT";
+    const companyPrefix = approver.includes("@optx") ? "OPTX" : "NW-QT";
     const docYear = new Date(quotation.documentDate).getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
     const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 
-    // ✅ คำนวณและบันทึก log ตาม status
     if (status === "Canceled" && level >= 2) {
       quotation.approvalStatus = "Canceled";
       quotation.cancelDate = new Date();
       quotation.canceledBy = approver;
-
       await Log.create({
         quotationId: quotation._id,
         action: "cancel",
@@ -174,7 +225,6 @@ exports.updateApproverInLevel = async (req, res) => {
       });
     } else if (status === "Rejected" && level >= 2) {
       quotation.approvalStatus = "Rejected";
-
       await Log.create({
         quotationId: quotation._id,
         action: "reject",
@@ -185,10 +235,8 @@ exports.updateApproverInLevel = async (req, res) => {
       const allApproved = approval.approvalHierarchy.every(
         (item) => item.status === "Approved"
       );
-
       if (allApproved) {
         quotation.approvalStatus = "Approved";
-
         await Log.create({
           quotationId: quotation._id,
           action: "approve",
@@ -196,7 +244,7 @@ exports.updateApproverInLevel = async (req, res) => {
           description: `${qtNumber} is fully approved.`,
         });
       } else {
-         await Log.create({
+        await Log.create({
           quotationId: quotation._id,
           action: "approve",
           performedBy: approver,
@@ -223,12 +271,13 @@ exports.updateApproverInLevel = async (req, res) => {
 exports.getApprovalStatus = async (req, res) => {
   try {
     const approval = await Approval.findById(req.params.id);
-    if (!approval) return res.status(404).json({ message: 'Approval not found' });
+    if (!approval)
+      return res.status(404).json({ message: "Approval not found" });
 
-    const status = approval.approvalHierarchy.map(hierarchy => ({
+    const status = approval.approvalHierarchy.map((hierarchy) => ({
       level: hierarchy.level,
       approver: hierarchy.approver,
-      status: hierarchy.status
+      status: hierarchy.status,
     }));
 
     res.status(200).json({ status });
@@ -258,7 +307,9 @@ exports.resetApprovalHierarchy = async (req, res) => {
       await quotation.save();
     }
 
-    res.status(200).json({ message: "Approval flow reset successfully", approval });
+    res
+      .status(200)
+      .json({ message: "Approval flow reset successfully", approval });
   } catch (error) {
     console.error("Error resetting approval hierarchy:", error.message);
     res.status(500).json({ message: error.message });
