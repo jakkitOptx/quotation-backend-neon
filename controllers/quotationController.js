@@ -598,7 +598,10 @@ exports.duplicateQuotation = async (req, res) => {
       // อัปเดตข้อมูล user ปัจจุบัน (ถ้าต้องการ)
       department: user.department,
       team: user.team || "",
-      teamGroup: user.teamGroup || ""
+      teamGroup: user.teamGroup || "",
+      // ✅ เพิ่มคำ "(Duplicated)" ใน title และ projectName
+      title: `${originalQT.title} (Duplicated)`,
+      projectName: `${originalQT.projectName} (Duplicated)`
     });
 
     await duplicatedQT.save();
