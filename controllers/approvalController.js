@@ -141,94 +141,25 @@ exports.updateApproverInLevel = async (req, res) => {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ หา user แบบ lowercase
+    // ✅ ดึงข้อมูล user จาก email
     const user = await User.findOne({ username: approver.toLowerCase().trim() });
 
-    // ========== กรณีเป็น admin ==========
-    if (user && user.role === "admin") {
-      const companyPrefix = approver.includes("@optx") ? "OPTX" : "NW-QT";
-      const docYear = new Date(quotation.documentDate).getFullYear();
-      const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
-      const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
-
-      // ✅ ถ้า admin อยู่ใน flow ให้ update hierarchy ด้วย
-      const hierarchyInFlow = approval.approvalHierarchy.find(
-        (item) => item.level === level && item.approver === approver
-      );
-      if (hierarchyInFlow) {
-        hierarchyInFlow.status = status;
-        hierarchyInFlow.approvedAt = new Date();
-      }
-
-      // ✅ จัดการอัปเดตสถานะ Quotation และบันทึก Log
-      if (status === "Canceled") {
-        quotation.approvalStatus = "Canceled";
-        quotation.cancelDate = new Date();
-        quotation.canceledBy = approver;
-
-        await Log.create({
-          quotationId: quotation._id,
-          action: "cancel",
-          performedBy: approver,
-          description: `Canceled ${qtNumber} by admin override`,
-        });
-      } else if (status === "Rejected") {
-        quotation.approvalStatus = "Rejected";
-
-        await Log.create({
-          quotationId: quotation._id,
-          action: "reject",
-          performedBy: approver,
-          description: `${qtNumber} rejected by admin override`,
-        });
-      } else if (status === "Approved") {
-        quotation.approvalStatus = "Approved";
-
-        await Log.create({
-          quotationId: quotation._id,
-          action: "approve",
-          performedBy: approver,
-          description: `${qtNumber} approved by admin override`,
-        });
-      }
-
-      await approval.save();
-      await quotation.save();
-
-      return res.status(200).json({
-        message: `Approval status updated to ${status} by admin override`,
-        approval,
-      });
-    }
-    // ============================================================
-
-    // ===== ไม่ใช่ admin → ทำ logic เดิม =====
-    const approverExists = approval.approvalHierarchy.some(
-      (hierarchy) => hierarchy.approver === approver
-    );
-    if (!approverExists) {
-      return res.status(403).json({
-        message: `Approver ${approver} is not authorized for this approval`,
-      });
-    }
-
+    // ====== อัปเดตใน flow ถ้ามีอยู่ ======
     const hierarchy = approval.approvalHierarchy.find(
       (item) => item.level === level && item.approver === approver
     );
-    if (!hierarchy) {
-      return res.status(404).json({
-        message: `Approval level ${level} with approver ${approver} not found`,
-      });
+    if (hierarchy) {
+      hierarchy.status = status;
+      hierarchy.approvedAt = new Date();
     }
 
-    hierarchy.status = status;
-    hierarchy.approvedAt = new Date();
-
+    // ✅ ตรวจ prefix ของรหัส QT
     const companyPrefix = approver.includes("@optx") ? "OPTX" : "NW-QT";
     const docYear = new Date(quotation.documentDate).getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
     const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 
+    // ====== จัดการตาม status ======
     if (status === "Canceled" && level >= 2) {
       quotation.approvalStatus = "Canceled";
       quotation.cancelDate = new Date();
@@ -238,8 +169,9 @@ exports.updateApproverInLevel = async (req, res) => {
         quotationId: quotation._id,
         action: "cancel",
         performedBy: approver,
-        description: `Canceled ${qtNumber} by ${approver}`,
+        description: `Canceled ${qtNumber} by ${user?.role === "admin" ? "admin override" : approver}`,
       });
+
     } else if (status === "Rejected" && level >= 2) {
       quotation.approvalStatus = "Rejected";
 
@@ -247,12 +179,15 @@ exports.updateApproverInLevel = async (req, res) => {
         quotationId: quotation._id,
         action: "reject",
         performedBy: approver,
-        description: `${qtNumber} was rejected by ${approver}`,
+        description: `${qtNumber} rejected by ${user?.role === "admin" ? "admin override" : approver}`,
       });
+
     } else if (status === "Approved") {
+      // ✅ เช็คทุกคนใน flow อนุมัติครบหรือยัง
       const allApproved = approval.approvalHierarchy.every(
         (item) => item.status === "Approved"
       );
+
       if (allApproved) {
         quotation.approvalStatus = "Approved";
 
@@ -267,7 +202,7 @@ exports.updateApproverInLevel = async (req, res) => {
           quotationId: quotation._id,
           action: "approve",
           performedBy: approver,
-          description: `Approved ${qtNumber} by ${approver}`,
+          description: `${qtNumber} approved by ${user?.role === "admin" ? "admin override" : approver}`,
         });
       }
     }
@@ -279,6 +214,7 @@ exports.updateApproverInLevel = async (req, res) => {
       message: `Approval status updated to ${status} for ${approver} at level ${level}`,
       approval,
     });
+
   } catch (error) {
     console.error("Error updating approval:", error.message);
     res.status(500).json({ message: error.message });
