@@ -77,6 +77,7 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     isDetailedForm,
     isSpecialForm,
     numberOfSpecialPages,
+    approvalStatus 
   } = req.body;
 
   try {
@@ -158,6 +159,7 @@ router.patch("/:id", authMiddleware, async (req, res) => {
         isDetailedForm,
         isSpecialForm,
         numberOfSpecialPages,
+        approvalStatus
       },
       { new: true }
     );
