@@ -21,7 +21,7 @@ const QuotationSchema = new mongoose.Schema({
   amount: { type: Number, required: true }, // ยอดรวมทั้งหมด
   allocation: { type: String }, // ไม่ required
   description: { type: String }, // คำอธิบายเอกสาร
-  approvalStatus: { type: String, default: "Pending" },
+  approvalStatus: { type: String, enum: ["Draft", "Pending", "Approved", "Rejected", "Canceled"], default: "Pending" },
   approvedBy: { type: String },
   runNumber: { type: String, required: true }, // เลขที่ใบเสนอราคา
   type: { type: String, default: "" }, // ประเภทเอกสาร

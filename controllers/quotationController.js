@@ -10,7 +10,7 @@ const roundUp = (num) => {
   return (num * 100) % 1 >= 0.5 ? _.ceil(num, 2) : _.round(num, 2);
 };
 
-// ✅ สร้างใบ Quotation ใหม่ (version ใส่ department + เงื่อนไขครบ)
+// ✅ สร้างใบ Quotation ใหม่ (version ใส่ department + รองรับ Draft)
 exports.createQuotation = async (req, res) => {
   const {
     title,
@@ -35,6 +35,7 @@ exports.createQuotation = async (req, res) => {
     isDetailedForm = false,
     isSpecialForm = false,
     numberOfSpecialPages = 1,
+    isDraft = false, // ✅ รับค่าจาก frontend
   } = req.body;
 
   try {
@@ -130,6 +131,7 @@ exports.createQuotation = async (req, res) => {
       type,
       runNumber: newRunNumber,
       items: processedItems,
+      approvalStatus: isDraft ? "Draft" : "Pending", // ✅ ถ้า isDraft = true ให้เป็น Draft
       approvalStatus: "Pending",
       remark,
       CreditTerm,
@@ -139,18 +141,19 @@ exports.createQuotation = async (req, res) => {
     });
 
     await quotation.save();
-    
-    // ✅ สร้าง log เมื่อสร้างใบเสนอราคาสำเร็จ
+
+    // ✅ สร้าง log
     const companyPrefix = createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
     const docYear = new Date(documentDate).getFullYear();
-    const runFormatted = newRunNumber;
-    const qtNumber = `${companyPrefix}(${type})-${docYear}-${runFormatted}`;
+    const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
 
     await Log.create({
       quotationId: quotation._id,
-      action: "create",
+      action: isDraft ? "save_draft" : "create",
       performedBy: createdByUser,
-      description: `Created quotation ${qtNumber}`,
+      description: isDraft
+        ? `Saved draft quotation ${qtNumber}`
+        : `Created quotation ${qtNumber}`,
     });
 
     res.status(201).json(quotation);
@@ -178,7 +181,7 @@ exports.getQuotations = async (req, res) => {
         if (user.level >= 3) {
           query.department = user.department;
         } else if (user.level === 2) {
-          query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+          query.teamGroup = user.teamGroup;
         } else {
           query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
         }
@@ -239,7 +242,7 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
       if (user.level >= 3) {
         query.department = user.department;
       } else if (user.level === 2) {
-        query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+        query.teamGroup = user.teamGroup;
       } else {
         query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
       }
@@ -307,7 +310,7 @@ exports.getQuotationsByEmail = async (req, res) => {
       if (user.level >= 3) {
         query.department = user.department;
       } else if (user.level === 2) {
-        query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+        query.teamGroup = user.teamGroup;
       } else {
         query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
       }
@@ -367,7 +370,7 @@ exports.getQuotationsWithPagination = async (req, res) => {
         if (user.level >= 3) {
           query.department = user.department;
         } else if (user.level === 2) {
-          query.teamGroup = user.teamGroup; // ✅ ตรงกับที่ console.log ได้มา AE2
+          query.teamGroup = user.teamGroup;
         } else {
           query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
         }
@@ -422,6 +425,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
 
     const quotations = await Quotation.find({
       documentDate: { $gte: start, $lt: end }, // ✅ filter by year
+      approvalStatus: { $ne: "Draft" }         // ✅ กรองไม่เอา Draft
     })
       .sort({ createdAt: -1 })
       .select(
@@ -574,8 +578,12 @@ exports.duplicateQuotation = async (req, res) => {
     const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
     const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
 
-    const existingQuotations = await Quotation.find({ type }).select("runNumber");
-    const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
+    const existingQuotations = await Quotation.find({ type }).select(
+      "runNumber"
+    );
+    const existingRunNumbers = existingQuotations.map((q) =>
+      Number(q.runNumber)
+    );
 
     let newRunNumber = "001";
     for (let i = startRunNumber; i <= 999; i++) {
@@ -601,13 +609,15 @@ exports.duplicateQuotation = async (req, res) => {
       teamGroup: user.teamGroup || "",
       // ✅ เพิ่มคำ "(Duplicated)" ใน title และ projectName
       title: `${originalQT.title} (Duplicated)`,
-      projectName: `${originalQT.projectName} (Duplicated)`
+      projectName: `${originalQT.projectName} (Duplicated)`,
     });
 
     await duplicatedQT.save();
 
     // ✅ Log การ duplicate
-    const companyPrefix = originalQT.createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
+    const companyPrefix = originalQT.createdByUser.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
     const docYear = new Date().getFullYear();
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
 
@@ -615,11 +625,10 @@ exports.duplicateQuotation = async (req, res) => {
       quotationId: duplicatedQT._id,
       action: "duplicate",
       performedBy: originalQT.createdByUser,
-      description: `Duplicated quotation from ${originalQT.runNumber} to ${qtNumber}`
+      description: `Duplicated quotation from ${originalQT.runNumber} to ${qtNumber}`,
     });
 
     res.status(201).json(duplicatedQT);
-
   } catch (error) {
     console.error("Error duplicating quotation:", error);
     res.status(500).json({ message: error.message });
