@@ -132,7 +132,6 @@ exports.createQuotation = async (req, res) => {
       runNumber: newRunNumber,
       items: processedItems,
       approvalStatus: isDraft ? "Draft" : "Pending", // ✅ ถ้า isDraft = true ให้เป็น Draft
-      approvalStatus: "Pending",
       remark,
       CreditTerm,
       isDetailedForm,
