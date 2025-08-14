@@ -19,6 +19,9 @@ router.post("/", quotationController.createQuotation);
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อม query year + email → ให้ controller จัดการ filter
 router.get("/", quotationController.getQuotations);
 
+// ✅ สรุปยอด total/pending/approved ในคำขอเดียว (ใช้ controller)
+router.get("/summary", quotationController.getQuotationsSummary);
+
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
 

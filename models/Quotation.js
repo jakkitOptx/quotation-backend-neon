@@ -106,4 +106,6 @@ QuotationSchema.virtual("clientDetails", {
 QuotationSchema.set("toObject", { virtuals: true });
 QuotationSchema.set("toJSON", { virtuals: true });
 
+QuotationSchema.index({ approvalStatus: 1, documentDate: 1 });
+
 module.exports = mongoose.model("Quotation", QuotationSchema);

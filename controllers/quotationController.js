@@ -652,3 +652,45 @@ exports.duplicateQuotation = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// GET /quotations/summary?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// สรุปยอด total / pending / approved ใน query เดียว
+exports.getQuotationsSummary = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    // เงื่อนไขกรองเสริม (ถ้าไม่ส่งมาจะไม่นำมาใช้)
+    const match = {};
+    if (startDate || endDate) {
+      match.documentDate = {};
+      if (startDate) match.documentDate.$gte = new Date(startDate);
+      if (endDate)   match.documentDate.$lte = new Date(endDate);
+    }
+
+    const [summary] = await Quotation.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          pending: {
+            $sum: {
+              $cond: [{ $eq: ["$approvalStatus", "Pending"] }, 1, 0],
+            },
+          },
+          approved: {
+            $sum: {
+              $cond: [{ $eq: ["$approvalStatus", "Approved"] }, 1, 0],
+            },
+          },
+        },
+      },
+      { $project: { _id: 0, total: 1, pending: 1, approved: 1 } },
+    ]);
+
+    res.json(summary || { total: 0, pending: 0, approved: 0 });
+  } catch (err) {
+    console.error("getQuotationsSummary error:", err);
+    res.status(500).json({ message: "Failed to get summary" });
+  }
+};
