@@ -132,7 +132,6 @@ exports.createQuotation = async (req, res) => {
       runNumber: newRunNumber,
       items: processedItems,
       approvalStatus: isDraft ? "Draft" : "Pending", // ✅ ถ้า isDraft = true ให้เป็น Draft
-      approvalStatus: "Pending",
       remark,
       CreditTerm,
       isDetailedForm,
@@ -425,7 +424,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
 
     const quotations = await Quotation.find({
       documentDate: { $gte: start, $lt: end }, // ✅ filter by year
-      approvalStatus: { $ne: "Draft" }         // ✅ กรองไม่เอา Draft
+      approvalStatus: { $ne: "Draft" },        // ✅ ไม่เอา Draft
     })
       .sort({ createdAt: -1 })
       .select(
@@ -444,12 +443,31 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
         },
       });
 
-    // ✅ filter ที่ต้อง approve โดย email นี้
+    // ✅ filter ที่ถึงคิว approver คนนี้เท่านั้น และไม่เอาใบที่ Canceled
     const filteredQuotations = quotations.filter((qt) => {
-      if (!qt.approvalHierarchy || qt.approvalHierarchy.length === 0)
+      if (
+        !qt.approvalHierarchy ||
+        qt.approvalHierarchy.length === 0 ||
+        qt.approvalStatus === "Canceled" // ✅ เพิ่มตรงนี้
+      )
         return false;
+
       const hierarchy = qt.approvalHierarchy[0]?.approvalHierarchy || [];
-      return hierarchy.some((level) => level.approver === email);
+
+      const approverIndex = hierarchy.findIndex(
+        (level) => level.approver === email
+      );
+
+      if (approverIndex === -1) return false; // ไม่มีอีเมลนี้ใน flow
+
+      const isReadyToApprove = hierarchy
+        .slice(0, approverIndex)
+        .every((level) => level.status === "Approved");
+
+      return (
+        hierarchy[approverIndex].status === "Pending" &&
+        isReadyToApprove
+      );
     });
 
     // ✅ ปัดเศษค่าตัวเลขก่อนส่งออก
