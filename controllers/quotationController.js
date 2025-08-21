@@ -579,29 +579,26 @@ exports.resetQuotation = async (req, res) => {
 exports.duplicateQuotation = async (req, res) => {
   try {
     const { id } = req.params;
-    const originalQT = await Quotation.findById(id);
 
+    // ใช้ .lean() เพื่อได้ plain object (จัดการ field ได้ง่ายและป้องกัน accidental save)
+    const originalQT = await Quotation.findById(id).lean();
     if (!originalQT) {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ ดึงข้อมูล user เพื่อเอา department, team ฯลฯ
+    // ✅ ดึงข้อมูล user ที่เป็นเจ้าของเอกสาร (ตาม logic เดิมของคุณ)
     const user = await User.findOne({ username: originalQT.createdByUser });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ ใช้ logic สร้าง runNumber แบบเดียวกับ createQuotation
+    // ✅ ออกเลข runNumber ใหม่ (logic เดิม)
     const type = originalQT.type || "M";
     const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
     const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
 
-    const existingQuotations = await Quotation.find({ type }).select(
-      "runNumber"
-    );
-    const existingRunNumbers = existingQuotations.map((q) =>
-      Number(q.runNumber)
-    );
+    const existingQuotations = await Quotation.find({ type }).select("runNumber");
+    const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
 
     let newRunNumber = "001";
     for (let i = startRunNumber; i <= 999; i++) {
@@ -611,31 +608,48 @@ exports.duplicateQuotation = async (req, res) => {
       }
     }
 
-    // ✅ Duplicate โดยคัดลอกข้อมูลทุกฟิลด์ ยกเว้น _id, createdAt, updatedAt
-    const duplicatedQT = new Quotation({
-      ...originalQT.toObject(),
-      _id: undefined,
-      isNew: true,
+    // ✅ เตรียมข้อมูลสำหรับเอกสารใหม่
+    //    - ลบ _id, id, createdAt, updatedAt เดิม
+    //    - ล้าง approvalHierarchy (อย่าอ้างอิงของเดิม)
+    //    - ลบ _id ของ items ทุกตัว
+    const sanitizedItems = (originalQT.items || []).map((it) => {
+      const { _id, id, ...rest } = it;
+      return { ...rest };
+    });
+
+    const {
+      _id, id: idVirtual, createdAt, updatedAt,
+      approvalHierarchy, approvedBy, cancelDate, canceledBy, reason, // จะรีเซ็ตค่าใหม่
+      ...restOriginal
+    } = originalQT;
+
+    const duplicatedPayload = {
+      ...restOriginal,
       runNumber: newRunNumber,
       approvalStatus: "Pending",
+      approvedBy: undefined,
+      approvalHierarchy: [], // ⬅️ สำคัญ: อย่า copy ของเก่า (กัน _id ซ้ำ และสถานะอนุมัติซ้ำ)
+      items: sanitizedItems,
       createdAt: new Date(),
       updatedAt: new Date(),
       documentDate: new Date(),
-      // อัปเดตข้อมูล user ปัจจุบัน (ถ้าต้องการ)
+      cancelDate: null,
+      reason: null,
+      canceledBy: null,
+      // อัปเดตข้อมูล user ปัจจุบัน (ตามโค้ดเดิมของคุณ)
       department: user.department,
       team: user.team || "",
       teamGroup: user.teamGroup || "",
       // ✅ เพิ่มคำ "(Duplicated)" ใน title และ projectName
       title: `${originalQT.title} (Duplicated)`,
       projectName: `${originalQT.projectName} (Duplicated)`,
-    });
+    };
 
-    await duplicatedQT.save();
+    // ✅ สร้างเอกสารใหม่ (Mongo จะ gen _id ใหม่ให้อัตโนมัติ)
+    const duplicatedQT = await Quotation.create(duplicatedPayload);
 
-    // ✅ Log การ duplicate
-    const companyPrefix = originalQT.createdByUser.includes("@optx")
-      ? "OPTX"
-      : "NW-QT";
+    // ✅ Log การ duplicate (logic เดิม)
+    const companyPrefix = originalQT.createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
     const docYear = new Date().getFullYear();
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
 
