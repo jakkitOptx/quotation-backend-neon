@@ -424,7 +424,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
 
     const quotations = await Quotation.find({
       documentDate: { $gte: start, $lt: end }, // ✅ filter by year
-      approvalStatus: { $ne: "Draft" },        // ✅ ไม่เอา Draft
+      approvalStatus: { $ne: "Draft" }, // ✅ ไม่เอา Draft
     })
       .sort({ createdAt: -1 })
       .select(
@@ -464,10 +464,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
         .slice(0, approverIndex)
         .every((level) => level.status === "Approved");
 
-      return (
-        hierarchy[approverIndex].status === "Pending" &&
-        isReadyToApprove
-      );
+      return hierarchy[approverIndex].status === "Pending" && isReadyToApprove;
     });
 
     // ✅ ปัดเศษค่าตัวเลขก่อนส่งออก
@@ -597,8 +594,12 @@ exports.duplicateQuotation = async (req, res) => {
     const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
     const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
 
-    const existingQuotations = await Quotation.find({ type }).select("runNumber");
-    const existingRunNumbers = existingQuotations.map((q) => Number(q.runNumber));
+    const existingQuotations = await Quotation.find({ type }).select(
+      "runNumber"
+    );
+    const existingRunNumbers = existingQuotations.map((q) =>
+      Number(q.runNumber)
+    );
 
     let newRunNumber = "001";
     for (let i = startRunNumber; i <= 999; i++) {
@@ -618,8 +619,15 @@ exports.duplicateQuotation = async (req, res) => {
     });
 
     const {
-      _id, id: idVirtual, createdAt, updatedAt,
-      approvalHierarchy, approvedBy, cancelDate, canceledBy, reason, // จะรีเซ็ตค่าใหม่
+      _id,
+      id: idVirtual,
+      createdAt,
+      updatedAt,
+      approvalHierarchy,
+      approvedBy,
+      cancelDate,
+      canceledBy,
+      reason, // จะรีเซ็ตค่าใหม่
       ...restOriginal
     } = originalQT;
 
@@ -649,7 +657,9 @@ exports.duplicateQuotation = async (req, res) => {
     const duplicatedQT = await Quotation.create(duplicatedPayload);
 
     // ✅ Log การ duplicate (logic เดิม)
-    const companyPrefix = originalQT.createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
+    const companyPrefix = originalQT.createdByUser.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
     const docYear = new Date().getFullYear();
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
 
@@ -660,7 +670,12 @@ exports.duplicateQuotation = async (req, res) => {
       description: `Duplicated quotation from ${originalQT.runNumber} to ${qtNumber}`,
     });
 
-    res.status(201).json(duplicatedQT);
+    res.status(201).json({
+      _id: duplicatedQT._id,
+      runNumber: duplicatedQT.runNumber,
+      type: duplicatedQT.type,
+      message: "Duplicated successfully",
+    });
   } catch (error) {
     console.error("Error duplicating quotation:", error);
     res.status(500).json({ message: error.message });
@@ -678,7 +693,7 @@ exports.getQuotationsSummary = async (req, res) => {
     if (startDate || endDate) {
       match.documentDate = {};
       if (startDate) match.documentDate.$gte = new Date(startDate);
-      if (endDate)   match.documentDate.$lte = new Date(endDate);
+      if (endDate) match.documentDate.$lte = new Date(endDate);
     }
 
     const [summary] = await Quotation.aggregate([
