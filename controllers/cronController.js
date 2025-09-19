@@ -2,6 +2,16 @@
 const Quotation = require("../models/Quotation");
 const { sendMail } = require("../utils/mailer");
 
+// เลือก URL หน้าเว็บสำหรับแต่ละบริษัท (ปรับได้ผ่าน ENV; มีค่า fallback)
+const getFrontendBaseUrl = (qt) => {
+  const isOptx =
+    typeof qt?.createdByUser === "string" &&
+    qt.createdByUser.toLowerCase().includes("@optx");
+  const optxUrl = process.env.FRONTEND_URL_OPTX || "https://optxfi.com";
+  const neonUrl = process.env.FRONTEND_URL_NEON || "https://neonworksfi.com";
+  return isOptx ? optxUrl : neonUrl;
+};
+
 /**
  * ส่งเมลสรุปใบเสนอราคาที่ "ถึงคิว" ของผู้อนุมัติแต่ละคน (เฉพาะ level ปัจจุบัน)
  * เรียกด้วย GET /api/cron/daily-approval-digest?secret=...
@@ -15,17 +25,13 @@ exports.dailyApprovalDigest = async (req, res) => {
     }
 
     // ✅ ดึง QT ที่ยังไม่ Draft และไม่ถูก Canceled
-    //    (ให้ครอบคลุมทั้ง Pending/Rejected ที่ยังค้างในขั้นต่อไป)
     const quotations = await Quotation.find({
-      approvalStatus: { $in: ["Pending", "Rejected", "Approved"] }, // อนุโลมไว้ แต่จะคัดกรองด้วย flow อีกที
+      approvalStatus: { $in: ["Pending", "Rejected", "Approved"] },
     })
-      .populate(
-        "clientId",
-        "customerName companyBaseName" // ← มีสองฟิลด์นี้ใน Client
-      )
+      .populate("clientId", "customerName companyBaseName")
       .populate({
         path: "approvalHierarchy",
-        select: "approvalHierarchy", // ← ดึง steps มาจริง
+        select: "approvalHierarchy",
       })
       .lean();
 
@@ -33,23 +39,20 @@ exports.dailyApprovalDigest = async (req, res) => {
     const mapByApprover = new Map();
 
     for (const qt of quotations) {
-      // หา steps จากเอกสาร Approval (ตัวแรก)
       const approvalDoc = Array.isArray(qt.approvalHierarchy)
         ? qt.approvalHierarchy[0]
         : null;
-
       const steps = approvalDoc?.approvalHierarchy || [];
-
       if (!steps.length) continue;
 
-      // หา level ที่ยัง Pending ทั้งหมด
       const pendingLevels = steps.filter((s) => s.status === "Pending");
       if (!pendingLevels.length) continue;
 
-      // หา "current level" = level ต่ำสุดที่ Pending และทุก level ก่อนหน้าต้อง Approved หมด
+      // หา level ต่ำสุดที่ Pending และทุก level ก่อนหน้าต้อง Approved หมด
       const candidateLevels = pendingLevels
         .map((s) => s.level)
         .sort((a, b) => a - b);
+
       let currentLevel = null;
       for (const lvl of candidateLevels) {
         const allPrevApproved = steps
@@ -62,7 +65,6 @@ exports.dailyApprovalDigest = async (req, res) => {
       }
       if (currentLevel === null) continue;
 
-      // ดึง step เฉพาะ current level
       const currentStep = steps.find(
         (s) => s.level === currentLevel && s.status === "Pending"
       );
@@ -70,10 +72,11 @@ exports.dailyApprovalDigest = async (req, res) => {
 
       const approverEmail = currentStep.approver.trim().toLowerCase();
 
-      // ✅ ชื่อเอกสาร และรหัสเอกสารตาม format ระบบ
-      const companyPrefix = qt.createdByUser?.includes("@optx")
-        ? "OPTX"
-        : "NW-QT";
+      // ✅ สร้างข้อมูลเอกสาร + ลิงก์
+      const isOptx =
+        typeof qt?.createdByUser === "string" &&
+        qt.createdByUser.toLowerCase().includes("@optx");
+      const companyPrefix = isOptx ? "OPTX" : "NW-QT";
       const year = new Date(qt.documentDate).getFullYear();
       const run = String(qt.runNumber || "").padStart(3, "0");
       const code = `${companyPrefix}(${qt.type})-${year}-${run}`;
@@ -84,6 +87,12 @@ exports.dailyApprovalDigest = async (req, res) => {
         qt.client ||
         "N/A";
 
+      const baseUrl = getFrontendBaseUrl(qt);
+      // 🔗 ลิงก์ไปหน้า detail ของ QT นั้น ๆ (ให้ ProtectedRoute/ Login จัดการ auth)
+      // ป้องกัน baseUrl มี / ท้ายสุดซ้ำ
+      const base = (baseUrl || "").replace(/\/+$/, "");
+      const detailUrl = `${base}/quotation-details/${qt._id}`;
+
       const item = {
         id: String(qt._id),
         code,
@@ -93,9 +102,11 @@ exports.dailyApprovalDigest = async (req, res) => {
         type: qt.type || "-",
         runNumber: qt.runNumber || "-",
         level: currentLevel,
+        url: detailUrl,
       };
 
-      if (!mapByApprover.has(approverEmail)) mapByApprover.set(approverEmail, []);
+      if (!mapByApprover.has(approverEmail))
+        mapByApprover.set(approverEmail, []);
       mapByApprover.get(approverEmail).push(item);
     }
 
@@ -114,17 +125,30 @@ exports.dailyApprovalDigest = async (req, res) => {
         return ("" + a.runNumber).localeCompare("" + b.runNumber);
       });
 
+      // HTML rows: ทำ code เป็นลิงก์คลิกได้
       const rows = items
         .map(
           (it) => `
             <tr>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.code}</td>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.title}</td>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.client}</td>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">
-                ${it.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">
+                <a href="${
+                  it.url
+                }" target="_blank" style="color:#2563eb;text-decoration:underline;">${
+            it.code
+          }</a>
               </td>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:center;">L${it.level}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${
+                it.title
+              }</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${
+                it.client
+              }</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">
+                ${it.amount.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </td>
             </tr>`
         )
         .join("");
@@ -140,28 +164,31 @@ exports.dailyApprovalDigest = async (req, res) => {
                 <th style="text-align:left;padding:8px;">Title</th>
                 <th style="text-align:left;padding:8px;">Client</th>
                 <th style="text-align:right;padding:8px;">Amount</th>
-                <th style="text-align:center;padding:8px;">Level</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
           <p style="margin-top:14px;color:#6b7280;font-size:12px;">
-            *อีเมลนี้ถูกส่งอัตโนมัติทุกวันเวลา 11:00 น.
+            *อีเมลนี้ถูกส่งอัตโนมัติทุกวันเวลา 11:00 น. คลิกเลขเอกสารเพื่อเปิดรายละเอียด (หากยังไม่ได้ล็อกอิน ระบบจะพาไปหน้า Login และเด้งกลับมาอัตโนมัติ)
           </p>
         </div>
       `;
 
+      // ข้อความล้วน: แทรก URL ต่อท้ายแต่ละบรรทัด
       const text = [
         `มีใบเสนอราคาที่รอคุณอนุมัติจำนวน ${items.length} รายการ`,
         ...items.map(
           (it) =>
-            `- ${it.code} | ${it.title} | ${it.client} | ${it.amount.toFixed(2)} | L${it.level}`
+            `- ${it.code} | ${it.title} | ${it.client} | ${it.amount.toFixed(
+              2
+            )} | ${it.url}`
         ),
       ].join("\n");
 
       tasks.push(
         sendMail({
           to: email,
+          // ใช้หัวข้อกลาง จะได้ไม่สับสนกรณีมีทั้ง OPTX/NEON ในฉบับเดียว
           subject: `NEON FINANCE: รายการรออนุมัติวันนี้ (${items.length} รายการ)`,
           html,
           text,
@@ -178,6 +205,8 @@ exports.dailyApprovalDigest = async (req, res) => {
     });
   } catch (err) {
     console.error("dailyApprovalDigest error:", err);
-    return res.status(500).json({ message: "Internal error", error: err.message });
+    return res
+      .status(500)
+      .json({ message: "Internal error", error: err.message });
   }
 };
