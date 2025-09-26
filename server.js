@@ -54,6 +54,7 @@ const approveFlowRoutes = require("./routes/approveFlowRoutes");
 const teamRoutes = require("./routes/teamRoutes");
 const departmentRoutes = require("./routes/departmentRoutes");
 const logRoutes = require("./routes/logRoutes");
+const cronRoutes = require("./routes/cronRoutes");
 
 // Routes
 app.use("/api/quotations", quotationRoutes);
@@ -68,10 +69,11 @@ app.use("/api/approve-flows", approveFlowRoutes);
 app.use("/api/teams", teamRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/logs", logRoutes);
+app.use("/api/cron", cronRoutes);
 
 // Health Check Endpoint
 app.get("/", (req, res) => {
-  res.status(200).json({ message: "BudgetBoss API is running!" });
+  res.status(200).json({ message: "NEON FINANCE API is running!" });
 });
 
 // Global Error Handler

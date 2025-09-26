@@ -1,9 +1,27 @@
 const Log = require("../models/Log");
 
-// ✅ get all logs
+// ✅ get all logs (with optional date filter)
 exports.getAllLogs = async (req, res) => {
   try {
-    const logs = await Log.find().sort({ timestamp: -1 });
+    const { startDate, endDate } = req.query;
+
+    // สร้าง filter object
+    const filter = {};
+
+    if (startDate || endDate) {
+      filter.timestamp = {};
+      if (startDate) {
+        filter.timestamp.$gte = new Date(startDate); // >= startDate
+      }
+      if (endDate) {
+        // set เวลาเป็นสิ้นสุดวัน เพื่อครอบคลุม log ทั้งวัน
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.timestamp.$lte = end; // <= endDate
+      }
+    }
+
+    const logs = await Log.find(filter).sort({ timestamp: -1 });
     res.status(200).json(logs);
   } catch (err) {
     console.error("Error getting logs:", err);
@@ -11,13 +29,27 @@ exports.getAllLogs = async (req, res) => {
   }
 };
 
-// ✅ get logs by quotationId
+// ✅ get logs by quotationId (with optional date filter)
 exports.getLogsByQuotation = async (req, res) => {
   try {
     const { quotationId } = req.params;
-    const logs = await Log.find({ quotationId })
-      .sort({ timestamp: -1 })
-      .exec();
+    const { startDate, endDate } = req.query;
+
+    const filter = { quotationId };
+
+    if (startDate || endDate) {
+      filter.timestamp = {};
+      if (startDate) {
+        filter.timestamp.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.timestamp.$lte = end;
+      }
+    }
+
+    const logs = await Log.find(filter).sort({ timestamp: -1 }).exec();
     res.status(200).json(logs);
   } catch (err) {
     console.error("Error getting logs by quotation:", err);
@@ -25,7 +57,7 @@ exports.getLogsByQuotation = async (req, res) => {
   }
 };
 
-// ✅ create a log (optional ใช้กรณี manual)
+// ✅ create a log (manual)
 exports.createLog = async (req, res) => {
   try {
     const { quotationId, action, performedBy, description } = req.body;
@@ -33,7 +65,7 @@ exports.createLog = async (req, res) => {
       quotationId,
       action,
       performedBy,
-      description
+      description,
     });
     await newLog.save();
     res.status(201).json(newLog);

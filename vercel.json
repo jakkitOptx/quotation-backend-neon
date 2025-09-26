@@ -17,9 +17,21 @@
       "source": "/api/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET,HEAD,OPTIONS,POST,PUT,PATCH,DELETE" },
-        { "key": "Access-Control-Allow-Headers", "value": "Origin, X-Requested-With, Content-Type, Accept, Authorization" }
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET,HEAD,OPTIONS,POST,PUT,PATCH,DELETE"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+        }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/daily-approval-digest?secret=superStrongSecret123",
+      "schedule": "0 4 * * *"
     }
   ]
 }
