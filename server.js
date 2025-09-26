@@ -55,6 +55,7 @@ const teamRoutes = require("./routes/teamRoutes");
 const departmentRoutes = require("./routes/departmentRoutes");
 const logRoutes = require("./routes/logRoutes");
 const cronRoutes = require("./routes/cronRoutes");
+const fixRoutes = require("./routes/fixRoutes");
 
 // Routes
 app.use("/api/quotations", quotationRoutes);
@@ -70,6 +71,7 @@ app.use("/api/teams", teamRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/logs", logRoutes);
 app.use("/api/cron", cronRoutes);
+app.use("/api/fix", fixRoutes);
 
 // Health Check Endpoint
 app.get("/", (req, res) => {
