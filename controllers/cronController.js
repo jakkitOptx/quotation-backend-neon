@@ -204,7 +204,11 @@ exports.dailyApprovalDigest = async (req, res) => {
       emailsSent: sent,
     });
   } catch (err) {
-    console.error("dailyApprovalDigest error:", err);
+      console.error("dailyApprovalDigest error:", {
+      message: err.message,
+      stack: err.stack,
+      name: err.name,
+    });
     return res
       .status(500)
       .json({ message: "Internal error", error: err.message });

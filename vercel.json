@@ -31,7 +31,7 @@
   "crons": [
     {
       "path": "/api/cron/daily-approval-digest?secret=superStrongSecret123",
-      "schedule": "0 4 * * 1-5"
+      "schedule": "0 3 * * 1-5"
     }
   ]
 }
