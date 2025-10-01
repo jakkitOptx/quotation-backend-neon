@@ -4,9 +4,8 @@ const Quotation = require("../models/Quotation");
 const Approval = require("../models/Approval");
 const router = express.Router();
 
-router.patch("/fix/:id", async (req, res) => {
+router.patch("/:id", async (req, res) => {   // ❌ เอา /fix ออก
   try {
-    // ✅ ตรวจสอบ secret ก่อน
     const secret = req.query.secret || req.headers["x-fix-secret"];
     if (!secret || secret !== process.env.FIX_SECRET) {
       return res.status(401).json({ message: "Unauthorized" });
@@ -18,18 +17,16 @@ router.patch("/fix/:id", async (req, res) => {
     const oldApproval = qt.approvalHierarchy[0];
     if (!oldApproval) return res.status(400).json({ message: "No approvalHierarchy found" });
 
-    // ✅ clone ใหม่
     const newApproval = new Approval({
       quotationId: qt._id,
       approvalHierarchy: oldApproval.approvalHierarchy.map((s) => ({
         approver: s.approver,
         level: s.level,
-        status: "Pending", // reset ใหม่
+        status: "Pending",
       })),
     });
     await newApproval.save();
 
-    // ✅ update QT ให้ชี้ไป id ใหม่
     qt.approvalHierarchy = [newApproval._id];
     qt.approvalStatus = "Pending";
     await qt.save();
