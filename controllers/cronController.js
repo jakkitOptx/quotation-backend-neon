@@ -18,13 +18,11 @@ const getFrontendBaseUrl = (qt) => {
  */
 exports.dailyApprovalDigest = async (req, res) => {
   try {
-    // ✅ ป้องกันด้วย secret
     const secret = req.query.secret || req.headers["x-cron-secret"];
     if (!secret || secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // ✅ ดึง QT ที่ยังไม่ Draft และไม่ถูก Canceled
     const quotations = await Quotation.find({
       approvalStatus: { $in: ["Pending", "Rejected", "Approved"] },
     })
@@ -35,7 +33,6 @@ exports.dailyApprovalDigest = async (req, res) => {
       })
       .lean();
 
-    // ✅ จัดกลุ่มตาม email ของ "ผู้ที่ถึงคิวอนุมัติ (current pending level)"
     const mapByApprover = new Map();
 
     for (const qt of quotations) {
@@ -48,7 +45,6 @@ exports.dailyApprovalDigest = async (req, res) => {
       const pendingLevels = steps.filter((s) => s.status === "Pending");
       if (!pendingLevels.length) continue;
 
-      // หา level ต่ำสุดที่ Pending และทุก level ก่อนหน้าต้อง Approved หมด
       const candidateLevels = pendingLevels
         .map((s) => s.level)
         .sort((a, b) => a - b);
@@ -72,7 +68,6 @@ exports.dailyApprovalDigest = async (req, res) => {
 
       const approverEmail = currentStep.approver.trim().toLowerCase();
 
-      // ✅ สร้างข้อมูลเอกสาร + ลิงก์
       const isOptx =
         typeof qt?.createdByUser === "string" &&
         qt.createdByUser.toLowerCase().includes("@optx");
@@ -87,11 +82,8 @@ exports.dailyApprovalDigest = async (req, res) => {
         qt.client ||
         "N/A";
 
-      const baseUrl = getFrontendBaseUrl(qt);
-      // 🔗 ลิงก์ไปหน้า detail ของ QT นั้น ๆ (ให้ ProtectedRoute/ Login จัดการ auth)
-      // ป้องกัน baseUrl มี / ท้ายสุดซ้ำ
-      const base = (baseUrl || "").replace(/\/+$/, "");
-      const detailUrl = `${base}/quotation-details/${qt._id}`;
+      const baseUrl = getFrontendBaseUrl(qt).replace(/\/+$/, "");
+      const detailUrl = `${baseUrl}/quotation-details/${qt._id}`;
 
       const item = {
         id: String(qt._id),
@@ -103,6 +95,7 @@ exports.dailyApprovalDigest = async (req, res) => {
         runNumber: qt.runNumber || "-",
         level: currentLevel,
         url: detailUrl,
+        baseUrl,
       };
 
       if (!mapByApprover.has(approverEmail))
@@ -114,7 +107,6 @@ exports.dailyApprovalDigest = async (req, res) => {
       return res.json({ message: "No pending approvals today. Done." });
     }
 
-    // ✅ ส่งเมลรายคน
     let sent = 0;
     const tasks = [];
 
@@ -125,24 +117,19 @@ exports.dailyApprovalDigest = async (req, res) => {
         return ("" + a.runNumber).localeCompare("" + b.runNumber);
       });
 
-      // HTML rows: ทำ code เป็นลิงก์คลิกได้
-      const rows = items
+      const MAX_ITEMS = 10;
+      const visibleItems = items.slice(-MAX_ITEMS);
+      const hiddenCount = items.length - visibleItems.length;
+
+      const rows = visibleItems
         .map(
           (it) => `
             <tr>
               <td style="padding:6px 8px;border-bottom:1px solid #eee;">
-                <a href="${
-                  it.url
-                }" target="_blank" style="color:#2563eb;text-decoration:underline;">${
-            it.code
-          }</a>
+                <a href="${it.url}" target="_blank" style="color:#2563eb;text-decoration:underline;">${it.code}</a>
               </td>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${
-                it.title
-              }</td>
-              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${
-                it.client
-              }</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.title}</td>
+              <td style="padding:6px 8px;border-bottom:1px solid #eee;">${it.client}</td>
               <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">
                 ${it.amount.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
@@ -153,10 +140,16 @@ exports.dailyApprovalDigest = async (req, res) => {
         )
         .join("");
 
+      const listBase = (visibleItems[0]?.baseUrl || items[0]?.baseUrl || "").replace(/\/+$/, "");
+      const moreUrl = `${listBase}/approvals`;
+
+      const companyPrefix =
+        listBase.includes("optx") ? "OPTX FINANCE" : "NEON FINANCE";
+
       const html = `
         <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial;">
           <h2 style="margin:0 0 8px;color:#111827;">รายการรออนุมัติของคุณวันนี้</h2>
-          <p style="margin:0 0 12px;color:#374151;">มีใบเสนอราคาที่รอคุณอนุมัติจำนวน <strong>${items.length}</strong> รายการ</p>
+          <p style="margin:0 0 12px;color:#374151;">มีใบเสนอราคาที่รอคุณอนุมัติทั้งหมด <strong>${items.length}</strong> รายการ</p>
           <table style="border-collapse:collapse;width:100%;font-size:14px;">
             <thead>
               <tr style="background:#f9fafb;">
@@ -168,28 +161,37 @@ exports.dailyApprovalDigest = async (req, res) => {
             </thead>
             <tbody>${rows}</tbody>
           </table>
+          ${
+            hiddenCount > 0
+              ? `<p style="margin-top:14px;">
+                   <a href="${moreUrl}" target="_blank" 
+                      style="background:#2563eb;color:#fff;padding:8px 12px;border-radius:6px;text-decoration:none;">
+                     ดูเพิ่มเติม (${hiddenCount} รายการ)
+                   </a>
+                 </p>`
+              : ""
+          }
           <p style="margin-top:14px;color:#6b7280;font-size:12px;">
-            *อีเมลนี้ถูกส่งอัตโนมัติทุกวันเวลา 11:00 น. คลิกเลขเอกสารเพื่อเปิดรายละเอียด (หากยังไม่ได้ล็อกอิน ระบบจะพาไปหน้า Login และเด้งกลับมาอัตโนมัติ)
+            *อีเมลนี้ถูกส่งอัตโนมัติทุกวันเวลา 10:00 น. คลิกเลขเอกสารเพื่อเปิดรายละเอียด
           </p>
         </div>
       `;
 
-      // ข้อความล้วน: แทรก URL ต่อท้ายแต่ละบรรทัด
       const text = [
-        `มีใบเสนอราคาที่รอคุณอนุมัติจำนวน ${items.length} รายการ`,
-        ...items.map(
+        `มีใบเสนอราคาที่รอคุณอนุมัติทั้งหมด ${items.length} รายการ`,
+        ...visibleItems.map(
           (it) =>
-            `- ${it.code} | ${it.title} | ${it.client} | ${it.amount.toFixed(
-              2
-            )} | ${it.url}`
+            `- ${it.code} | ${it.title} | ${it.client} | ${it.amount.toFixed(2)} | ${it.url}`
         ),
+        hiddenCount > 0
+          ? `...และมีอีก ${hiddenCount} รายการ ดูเพิ่มเติมที่: ${moreUrl}`
+          : "",
       ].join("\n");
 
       tasks.push(
         sendMail({
           to: email,
-          // ใช้หัวข้อกลาง จะได้ไม่สับสนกรณีมีทั้ง OPTX/NEON ในฉบับเดียว
-          subject: `NEON FINANCE: รายการรออนุมัติวันนี้ (${items.length} รายการ)`,
+          subject: `${companyPrefix}: รายการรออนุมัติวันนี้ (${items.length} รายการ)`,
           html,
           text,
         }).then(() => sent++)
@@ -204,7 +206,7 @@ exports.dailyApprovalDigest = async (req, res) => {
       emailsSent: sent,
     });
   } catch (err) {
-      console.error("dailyApprovalDigest error:", {
+    console.error("dailyApprovalDigest error:", {
       message: err.message,
       stack: err.stack,
       name: err.name,
