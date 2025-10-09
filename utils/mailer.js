@@ -2,12 +2,15 @@
 const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: false, // ถ้าใช้ port 465 ค่อยเปลี่ยนเป็น true
+  host: process.env.SMTP_HOST,       // smtp.gmail.com
+  port: process.env.SMTP_PORT,       // 587
+  secure: false,                     // ต้อง false เวลาใช้ port 587
   auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
+    user: process.env.SMTP_USER,     // neonworks@neonworks.co.th
+    pass: process.env.SMTP_PASS,     // App Password 16 หลัก
+  },
+  tls: {
+    rejectUnauthorized: false,       // ✅ สำคัญมาก! ป้องกัน Gmail TLS ปฏิเสธ connection
   },
 });
 
