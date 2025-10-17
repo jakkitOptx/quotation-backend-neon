@@ -723,3 +723,62 @@ exports.getQuotationsSummary = async (req, res) => {
     res.status(500).json({ message: "Failed to get summary" });
   }
 };
+
+exports.updateApprovalFlow = async (req, res) => {
+  try {
+    const { id } = req.params;        // quotationId
+    const { email } = req.body;       // user ที่จะใช้ flow ของเขา
+
+    const quotation = await Quotation.findById(id);
+    if (!quotation)
+      return res.status(404).json({ message: "Quotation not found" });
+
+    // ✅ หาผู้ใช้
+    const userEmail = email || quotation.createdByUser;
+    const user = await User.findOne({ username: userEmail });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // ✅ ดึง flow ล่าสุดของ user จาก ApproveFlow
+    const ApproveFlow = require("../models/ApproveFlow");
+    const templateFlow = await ApproveFlow.findById(user.flow);
+    if (!templateFlow)
+      return res.status(404).json({ message: "Approve flow not found" });
+
+    // ✅ ลบ flow เดิม (Approval instance เดิม)
+    await Approval.deleteMany({ quotationId: quotation._id });
+
+    // ✅ สร้าง Approval ใหม่จาก template
+    const newApproval = await Approval.create({
+      quotationId: quotation._id,
+      approvalHierarchy: templateFlow.approvalHierarchy.map((step) => ({
+        level: step.level,
+        approver: step.approver,
+        status: "Pending",
+        approvedAt: null,
+      })),
+    });
+
+    // ✅ อัปเดต Quotation ให้ชี้ flow ใหม่
+    quotation.approvalHierarchy = [newApproval._id];
+    quotation.approvalStatus = "Pending";
+    await quotation.save();
+
+    // ✅ Log การเปลี่ยนแปลง
+    await Log.create({
+      quotationId: quotation._id,
+      action: "update_flow",
+      performedBy: userEmail,
+      description: `Updated approval flow from ApproveFlow template by ${userEmail}`,
+    });
+
+    res.status(200).json({
+      message: "Approval flow updated successfully",
+      quotation,
+    });
+  } catch (error) {
+    console.error("Error updating approval flow:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+

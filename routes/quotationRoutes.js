@@ -25,37 +25,6 @@ router.get("/summary", quotationController.getQuotationsSummary);
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
 
-// ✅ ดึงใบเสนอราคาเดี่ยว พร้อม field department
-router.get("/:id", async (req, res) => {
-  try {
-    const quotation = await Quotation.findById(req.params.id)
-      .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages"
-      )
-
-      .populate({
-        path: "approvalHierarchy",
-        select: "quotationId approvalHierarchy",
-        populate: {
-          path: "approvalHierarchy",
-          select: "level approver status",
-        },
-      })
-      .populate(
-        "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
-      ); // ✅ เพิ่มการ populate clientId
-
-    if (!quotation) {
-      return res.status(404).json({ message: "Quotation not found" });
-    }
-
-    res.status(200).json(quotation);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
 // ✅ อัปเดตใบเสนอราคา
 router.patch("/:id", authMiddleware, async (req, res) => {
   const {
@@ -340,4 +309,37 @@ router.patch("/:id/reset", authMiddleware, quotationController.resetQuotation);
 
 // ✅ Duplicate Quotation
 router.post("/:id/duplicate", quotationController.duplicateQuotation);
+
+// ✅ อัปเดต Flow ของใบเสนอราคาเดิมให้เป็น Flow ปัจจุบัน
+router.patch("/:id/update-approval-flow", quotationController.updateApprovalFlow);
+// ✅ ดึงใบเสนอราคาเดี่ยว พร้อม field department
+router.get("/:id", async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id)
+      .select(
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages"
+      )
+
+      .populate({
+        path: "approvalHierarchy",
+        select: "quotationId approvalHierarchy",
+        populate: {
+          path: "approvalHierarchy",
+          select: "level approver status",
+        },
+      })
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber"
+      ); // ✅ เพิ่มการ populate clientId
+
+    if (!quotation) {
+      return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    res.status(200).json(quotation);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
 module.exports = router;
