@@ -3,6 +3,7 @@ const Approval = require("../models/Approval");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 const Log = require("../models/Log");
+const Notification = require("../models/Notification");
 
 // ✅ สร้าง Approval Hierarchy
 exports.createApprovalHierarchy = async (req, res) => {
@@ -111,11 +112,6 @@ exports.updateApproverInLevel = async (req, res) => {
     if (!quotation)
       return res.status(404).json({ message: "Quotation not found" });
 
-    const user = await User.findOne({
-      username: approver.toLowerCase().trim(),
-    });
-
-    // === อัปเดตสถานะใน Flow ===
     const hierarchy = approval.approvalHierarchy.find(
       (item) => item.level === level && item.approver === approver
     );
@@ -130,27 +126,36 @@ exports.updateApproverInLevel = async (req, res) => {
     const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 
     const io = global._io;
+    const now = new Date(); // ✅ ใช้ timestamp เดียวกันในทุก action
 
-    // ====== สถานะต่าง ๆ ======
+    // ✅ CANCELED
     if (status === "Canceled" && level >= 2) {
       quotation.approvalStatus = "Canceled";
-      quotation.cancelDate = new Date();
+      quotation.cancelDate = now;
       quotation.canceledBy = approver;
 
       await Log.create({
         quotationId: quotation._id,
         action: "cancel",
         performedBy: approver,
-        description: `Canceled ${qtNumber} by ${user?.role === "admin" ? "admin override" : approver}`,
+        description: `Canceled ${qtNumber}`,
       });
 
-      if (io && quotation.createdByUser) {
-        io.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-          title: "❌ ใบเสนอราคาถูกยกเลิก",
-          message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`,
-        });
-      }
+      await Notification.create({
+        user: quotation.createdByUser,
+        message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`,
+        createdBy: approver,
+        type: "approval",
+        createdAt: now,
+      });
 
+      io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
+        title: "❌ ใบเสนอราคาถูกยกเลิก",
+        message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`,
+        createdAt: now,
+      });
+
+    // ✅ REJECTED
     } else if (status === "Rejected" && level >= 2) {
       quotation.approvalStatus = "Rejected";
 
@@ -158,21 +163,30 @@ exports.updateApproverInLevel = async (req, res) => {
         quotationId: quotation._id,
         action: "reject",
         performedBy: approver,
-        description: `${qtNumber} rejected by ${user?.role === "admin" ? "admin override" : approver}`,
+        description: `${qtNumber} rejected by ${approver}`,
       });
 
-      if (io && quotation.createdByUser) {
-        io.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-          title: "🚫 ใบเสนอราคาถูก Reject",
-          message: `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`,
-        });
-      }
+      await Notification.create({
+        user: quotation.createdByUser,
+        message: `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`,
+        createdBy: approver,
+        type: "approval",
+        createdAt: now,
+      });
 
+      io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
+        title: "🚫 ใบเสนอราคาถูก Reject",
+        message: `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`,
+        createdAt: now,
+      });
+
+    // ✅ APPROVED
     } else if (status === "Approved") {
       const allApproved = approval.approvalHierarchy.every(
         (item) => item.status === "Approved"
       );
 
+      // 🔹 กรณีอนุมัติครบทุกลำดับ
       if (allApproved) {
         quotation.approvalStatus = "Approved";
 
@@ -183,61 +197,63 @@ exports.updateApproverInLevel = async (req, res) => {
           description: `${qtNumber} is fully approved.`,
         });
 
-        // ✅ แจ้งผู้สร้างใบเสนอราคา (อนุมัติครบทุกคน)
-        if (io && quotation.createdByUser) {
-          io.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-            title: "✅ ใบเสนอราคาอนุมัติครบทุกคนแล้ว",
-            message: `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ`,
-          });
-        }
+        await Notification.create({
+          user: quotation.createdByUser,
+          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ ✅`,
+          createdBy: approver,
+          type: "approval",
+          createdAt: now,
+        });
 
+        io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
+          title: "✅ ใบเสนอราคาอนุมัติครบทุกคนแล้ว",
+          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ`,
+          createdAt: now,
+        });
+
+      // 🔹 กรณีอนุมัติบางลำดับ (ยังไม่ครบ)
       } else {
         await Log.create({
           quotationId: quotation._id,
           action: "approve",
           performedBy: approver,
-          description: `${qtNumber} approved by ${user?.role === "admin" ? "admin override" : approver}`,
+          description: `${qtNumber} approved by ${approver}`,
         });
 
-        // ✅ แจ้ง “ผู้อนุมัติลำดับถัดไป”
+        // แจ้งผู้อนุมัติลำดับถัดไป
         const nextLevel = approval.approvalHierarchy.find(
           (lvl) => lvl.status === "Pending"
         );
-        if (io && nextLevel && nextLevel.approver) {
-          const nextEmail = nextLevel.approver.toLowerCase().trim();
-          io.to(nextEmail).emit("notification", {
+        if (nextLevel?.approver) {
+          await Notification.create({
+            user: nextLevel.approver,
+            message: `เอกสาร ${qtNumber} รอการอนุมัติจากคุณ`,
+            createdBy: approver,
+            type: "approval",
+            createdAt: now,
+          });
+
+          io?.to(nextLevel.approver.toLowerCase().trim()).emit("notification", {
             title: "📩 ใบเสนอราคาพร้อมรออนุมัติ",
-            message: `เอกสาร ${qtNumber} รออนุมัติจากคุณ`,
+            message: `เอกสาร ${qtNumber} รอการอนุมัติจากคุณ`,
+            createdAt: now,
           });
-          console.log(`🔔 Emit to next approver: ${nextEmail}`);
         }
 
-        // ✅ แจ้ง “ผู้สร้างเอกสาร” ว่ามีคนอนุมัติแล้ว
-        if (io && quotation.createdByUser) {
-          const createdEmail = quotation.createdByUser.toLowerCase().trim();
-          io.to(createdEmail).emit("notification", {
-            title: "✅ ใบเสนอราคาของคุณได้รับการอนุมัติแล้ว",
-            message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`,
-          });
-          console.log(`📨 Notify createdByUser: ${createdEmail}`);
-        }
+        // แจ้งผู้สร้างเอกสาร
+        await Notification.create({
+          user: quotation.createdByUser,
+          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`,
+          createdBy: approver,
+          type: "approval",
+          createdAt: now,
+        });
 
-        // ✅ แจ้ง “ผู้อนุมัติลำดับก่อนหน้า” (optional)
-        const currentIndex = approval.approvalHierarchy.findIndex(
-          (lvl) =>
-            lvl.approver.toLowerCase().trim() === approver.toLowerCase().trim()
-        );
-        if (currentIndex > 0) {
-          const prevLevel = approval.approvalHierarchy[currentIndex - 1];
-          if (io && prevLevel && prevLevel.approver) {
-            const prevEmail = prevLevel.approver.toLowerCase().trim();
-            io.to(prevEmail).emit("notification", {
-              title: "ℹ️ ลำดับถัดไปได้อนุมัติเอกสารแล้ว",
-              message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`,
-            });
-            console.log(`🔔 Emit to previous approver: ${prevEmail}`);
-          }
-        }
+        io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
+          title: "✅ ใบเสนอราคาของคุณได้รับการอนุมัติแล้ว",
+          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`,
+          createdAt: now,
+        });
       }
     }
 
@@ -248,7 +264,6 @@ exports.updateApproverInLevel = async (req, res) => {
       message: `Approval status updated to ${status} for ${approver} at level ${level}`,
       approval,
     });
-
   } catch (error) {
     console.error("❌ Error updating approval:", error.message);
     res.status(500).json({ message: error.message });
