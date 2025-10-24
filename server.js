@@ -3,15 +3,13 @@ const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const morgan = require("morgan");
-const http = require("http");
-const { Server } = require("socket.io");
 
 dotenv.config();
 
 const corsOptions = {
   origin: [
-    "http://localhost:3000",        // ✅ สำหรับ local dev
-    "https://neonworksfi.com",      // ✅ สำหรับ production
+    "http://localhost:3000",
+    "https://neonworksfi.com",
   ],
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   credentials: true,
@@ -23,7 +21,7 @@ app.use(express.json());
 app.use(cors(corsOptions));
 app.use(morgan("dev"));
 
-// ✅ MongoDB Connection
+// ✅ MongoDB
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
@@ -35,7 +33,7 @@ mongoose
     process.exit(1);
   });
 
-// ✅ Register Routes
+// ✅ Routes
 const quotationRoutes = require("./routes/quotationRoutes");
 const approvalRoutes = require("./routes/approvalRoutes");
 const authRoutes = require("./routes/authRoutes");
@@ -67,7 +65,7 @@ app.use("/api/cron", cronRoutes);
 app.use("/api/fix", fixRoutes);
 
 app.get("/", (req, res) => {
-  res.status(200).json({ message: "NEON FINANCE API is running!" });
+    res.status(200).json({ message: "NEON FINANCE API is running!" });
 });
 
 // ✅ Error Handler
@@ -81,38 +79,8 @@ app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// ✅ HTTP Server + Socket.io
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: ["http://localhost:3000", "https://neonworksfi.com"],
-    methods: ["GET", "POST", "PATCH"],
-    credentials: true,
-  },
-});
-
-// ✅ เก็บ io ไว้ใน global ให้ controller ทุกตัวใช้ได้
-global._io = io;
-
-// ✅ ตั้งค่า event ให้ log ดูง่ายตอนทดสอบ
-io.on("connection", (socket) => {
-  console.log("🟢 Socket connected:", socket.id);
-
-  socket.on("register", (email) => {
-    if (email) {
-      console.log(`📩 ${email} joined room`);
-      socket.join(email);
-    } else {
-      console.warn("⚠️ register event ไม่มี email ที่ส่งมาจาก frontend");
-    }
-  });
-
-  socket.on("disconnect", (reason) => {
-    console.log(`🔴 Socket disconnected: ${socket.id} (${reason})`);
-  });
-});
-
+// ✅ เริ่ม server ปกติ
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server + Socket.io running on http://localhost:${PORT}`);
+app.listen(PORT, () => {
+  console.log(`🚀 API Server running on port ${PORT}`);
 });

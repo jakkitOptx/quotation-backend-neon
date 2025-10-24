@@ -120,13 +120,41 @@ exports.updateApproverInLevel = async (req, res) => {
       hierarchy.approvedAt = new Date();
     }
 
-    const companyPrefix = approver.includes("@optx") ? "OPTX" : "NW-QT";
+    const companyPrefix = approver.includes("@optx")
+      ? "OPTX"
+      : approver.includes("@neonworks")
+      ? "NW-QT"
+      : "QT";
+
     const docYear = new Date(quotation.documentDate).getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
     const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 
-    const io = global._io;
-    const now = new Date(); // ✅ ใช้ timestamp เดียวกันในทุก action
+    const now = new Date();
+
+    // ✅ helper ฟังก์ชันสำหรับสร้าง domain prefix
+    const getRoomKey = (email) => {
+      const domain = email.includes("@optx")
+        ? "optx"
+        : email.includes("@neonworks")
+        ? "neonworks"
+        : "general";
+      return `${domain}:${email.toLowerCase().trim()}`;
+    };
+
+    // ✅ helper ฟังก์ชันสำหรับยิงแจ้งเตือนไปยัง Render Socket Server
+    const sendSocketNotification = async (to, title, message) => {
+      try {
+        const roomKey = getRoomKey(to);
+        await fetch("https://socket-server-h4f6.onrender.com/emit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: roomKey, title, message }),
+        });
+      } catch (err) {
+        console.error("⚠️ Failed to send socket notification:", err.message);
+      }
+    };
 
     // ✅ CANCELED
     if (status === "Canceled" && level >= 2) {
@@ -149,13 +177,13 @@ exports.updateApproverInLevel = async (req, res) => {
         createdAt: now,
       });
 
-      io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-        title: "❌ ใบเสนอราคาถูกยกเลิก",
-        message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`,
-        createdAt: now,
-      });
+      await sendSocketNotification(
+        quotation.createdByUser,
+        "❌ ใบเสนอราคาถูกยกเลิก",
+        `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`
+      );
 
-    // ✅ REJECTED
+      // ✅ REJECTED
     } else if (status === "Rejected" && level >= 2) {
       quotation.approvalStatus = "Rejected";
 
@@ -174,13 +202,13 @@ exports.updateApproverInLevel = async (req, res) => {
         createdAt: now,
       });
 
-      io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-        title: "🚫 ใบเสนอราคาถูก Reject",
-        message: `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`,
-        createdAt: now,
-      });
+      await sendSocketNotification(
+        quotation.createdByUser,
+        "🚫 ใบเสนอราคาถูก Reject",
+        `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`
+      );
 
-    // ✅ APPROVED
+      // ✅ APPROVED
     } else if (status === "Approved") {
       const allApproved = approval.approvalHierarchy.every(
         (item) => item.status === "Approved"
@@ -205,13 +233,13 @@ exports.updateApproverInLevel = async (req, res) => {
           createdAt: now,
         });
 
-        io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-          title: "✅ ใบเสนอราคาอนุมัติครบทุกคนแล้ว",
-          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ`,
-          createdAt: now,
-        });
+        await sendSocketNotification(
+          quotation.createdByUser,
+          "✅ ใบเสนอราคาอนุมัติครบทุกคนแล้ว",
+          `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ`
+        );
 
-      // 🔹 กรณีอนุมัติบางลำดับ (ยังไม่ครบ)
+        // 🔹 กรณีอนุมัติบางลำดับ (ยังไม่ครบ)
       } else {
         await Log.create({
           quotationId: quotation._id,
@@ -233,11 +261,11 @@ exports.updateApproverInLevel = async (req, res) => {
             createdAt: now,
           });
 
-          io?.to(nextLevel.approver.toLowerCase().trim()).emit("notification", {
-            title: "📩 ใบเสนอราคาพร้อมรออนุมัติ",
-            message: `เอกสาร ${qtNumber} รอการอนุมัติจากคุณ`,
-            createdAt: now,
-          });
+          await sendSocketNotification(
+            nextLevel.approver,
+            "📩 ใบเสนอราคาพร้อมรออนุมัติ",
+            `เอกสาร ${qtNumber} รอการอนุมัติจากคุณ`
+          );
         }
 
         // แจ้งผู้สร้างเอกสาร
@@ -249,11 +277,11 @@ exports.updateApproverInLevel = async (req, res) => {
           createdAt: now,
         });
 
-        io?.to(quotation.createdByUser.toLowerCase().trim()).emit("notification", {
-          title: "✅ ใบเสนอราคาของคุณได้รับการอนุมัติแล้ว",
-          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`,
-          createdAt: now,
-        });
+        await sendSocketNotification(
+          quotation.createdByUser,
+          "✅ ใบเสนอราคาของคุณได้รับการอนุมัติแล้ว",
+          `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`
+        );
       }
     }
 
