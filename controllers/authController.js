@@ -127,9 +127,9 @@ exports.login = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    console.log("🔹 Login attempt for:", username);
-    console.log("✅ Stored Password (Hashed):", user.password);
-    console.log("🔹 Input Password:", password);
+    if (process.env.NODE_ENV === "development") {
+      console.log("🔹 Login attempt for:", username);
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
     console.log("🔹 Password Match:", isMatch);
