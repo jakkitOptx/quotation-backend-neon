@@ -1,4 +1,3 @@
-// server.js
 const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
@@ -9,9 +8,8 @@ dotenv.config();
 
 const corsOptions = {
   origin: [
-    "http://localhost:3000", // สำหรับพัฒนาในเครื่อง
-    "https://budgetboss.netlify.app", // Netlify SIT
-    // "https://your-custom-domain.com" // ถ้ามีโดเมนของตัวเอง
+    "http://localhost:3000",
+    "https://neonworksfi.com",
   ],
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   credentials: true,
@@ -19,29 +17,23 @@ const corsOptions = {
 };
 
 const app = express();
+app.use(express.json());
+app.use(cors(corsOptions));
+app.use(morgan("dev"));
 
-// Middleware
-app.use(express.json()); // สำหรับ parse JSON request body
-// app.use(cors()); // สำหรับจัดการ CORS
-app.use(cors(corsOptions)); // ✅ ใช้ corsOptions เพื่อกำหนด Origin ที่อนุญาต
-app.use(morgan("dev")); // สำหรับ log request (ช่วย debug)
-
-
-// เชื่อมต่อ MongoDB
+// ✅ MongoDB
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
-    connectTimeoutMS: 30000, // ⏳ ถ้าเชื่อมต่อไม่สำเร็จภายใน 30 วินาที ให้ตัดการเชื่อมต่อ
-    socketTimeoutMS: 45000, // ⏳ ป้องกัน MongoDB ตัดการเชื่อมต่อเร็วเกินไป
   })
   .then(() => console.log("✅ MongoDB Connected"))
   .catch((err) => {
-    console.error("❌ MongoDB Connection Error:", err.message);
-    process.exit(1); // หากเชื่อมต่อไม่ได้ ให้หยุดการทำงาน
+    console.error("❌ MongoDB Error:", err.message);
+    process.exit(1);
   });
 
-// Routes
+// ✅ Routes
 const quotationRoutes = require("./routes/quotationRoutes");
 const approvalRoutes = require("./routes/approvalRoutes");
 const authRoutes = require("./routes/authRoutes");
@@ -57,7 +49,6 @@ const logRoutes = require("./routes/logRoutes");
 const cronRoutes = require("./routes/cronRoutes");
 const fixRoutes = require("./routes/fixRoutes");
 
-// Routes
 app.use("/api/quotations", quotationRoutes);
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/auth", authRoutes);
@@ -73,26 +64,23 @@ app.use("/api/logs", logRoutes);
 app.use("/api/cron", cronRoutes);
 app.use("/api/fix", fixRoutes);
 
-// Health Check Endpoint
 app.get("/", (req, res) => {
-  res.status(200).json({ message: "NEON FINANCE API is running!" });
+    res.status(200).json({ message: "NEON FINANCE API is running!" });
 });
 
-// Global Error Handler
+// ✅ Error Handler
 app.use((err, req, res, next) => {
   console.error("Global Error:", err.stack);
-  res.status(err.status || 500).json({
-    message: err.message || "Internal Server Error",
-  });
+  res.status(err.status || 500).json({ message: err.message || "Internal Server Error" });
 });
 
-// 404 Error Handler
-app.use((req, res, next) => {
+// ✅ 404 Handler
+app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// Start Server
+// ✅ เริ่ม server ปกติ
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 API Server running on port ${PORT}`);
 });

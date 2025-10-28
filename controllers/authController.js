@@ -153,7 +153,7 @@ exports.login = async (req, res) => {
         teamRole: user.teamRole,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "5h" }
+      { expiresIn: "12h" } // ✅ ปรับเป็น 12 ชั่วโมง
     );
 
     res.status(200).json({
@@ -172,7 +172,7 @@ exports.login = async (req, res) => {
         teamGroup: user.teamGroup,
         teamRole: user.teamRole,
       },
-      expiresIn: 5 * 60 * 60,
+      expiresIn: 12 * 60 * 60, // ✅ 43200 วินาที
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
