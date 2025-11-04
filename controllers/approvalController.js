@@ -53,32 +53,64 @@ exports.updateApprovalStatus = async (req, res) => {
   const { level, status } = req.body;
 
   try {
-    const user = await User.findById(req.userId);
+    // ✅ ใช้ข้อมูลผู้ใช้จาก Token โดยตรง (ไม่ query DB)
+    const user = req.user;
     if (!user) return res.status(401).json({ message: "User not found" });
 
+    // ✅ ตรวจสิทธิ์ระดับ Level
     if (user.level < level) {
-      return res.status(403).json({ message: "Permission denied: Insufficient level" });
+      return res
+        .status(403)
+        .json({ message: "Permission denied: Insufficient level" });
     }
 
+    // ✅ ค้นหา Approval ตาม ID
     const approval = await Approval.findById(req.params.id);
-    if (!approval) return res.status(404).json({ message: "Approval not found" });
+    if (!approval)
+      return res.status(404).json({ message: "Approval not found" });
 
-    const hierarchy = approval.approvalHierarchy.find((item) => item.level === level);
+    // ✅ หาระดับที่ต้องอัปเดต
+    const hierarchy = approval.approvalHierarchy.find(
+      (item) => item.level === level
+    );
     if (!hierarchy)
-      return res.status(404).json({ message: `Approval level ${level} not found` });
+      return res
+        .status(404)
+        .json({ message: `Approval level ${level} not found` });
 
+    // ✅ อัปเดตสถานะใน Level
     hierarchy.status = status;
     hierarchy.approvedAt = new Date();
 
+    // ✅ ตรวจสอบว่าทุก Level ผ่านหมดหรือยัง
     const allApproved = approval.approvalHierarchy.every(
       (item) => item.status === "Approved"
     );
 
     if (allApproved) {
       const quotation = await Quotation.findById(approval.quotationId);
-      if (!quotation) return res.status(404).json({ message: "Quotation not found" });
+      if (!quotation)
+        return res.status(404).json({ message: "Quotation not found" });
+
       quotation.approvalStatus = "Approved";
       await quotation.save();
+
+      // ✅ เพิ่ม Log เมื่ออนุมัติครบทุก Level
+      const performedBy = user?.username || "unknown";
+      const companyPrefix = performedBy.includes("@optx")
+        ? "OPTX"
+        : "NW-QT";
+
+      const currentYear = new Date().getFullYear();
+      const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
+      const qtCode = `${companyPrefix}(${quotation.type})-${currentYear}-${runFormatted}`;
+
+      await Log.create({
+        quotationId: quotation._id,
+        action: "approve",
+        performedBy,
+        description: `Quotation ${qtCode} fully approved`,
+      });
     }
 
     await approval.save();

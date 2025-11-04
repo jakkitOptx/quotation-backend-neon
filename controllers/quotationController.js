@@ -545,11 +545,14 @@ exports.resetQuotation = async (req, res) => {
     quotation.approvalStatus = "Pending";
     await quotation.save();
 
-    // ✅ บันทึก Log
-    const user = await User.findById(req.userId);
+    // ✅ บันทึก Log (ใช้ข้อมูลจาก token โดยไม่ต้อง query DB)
+    const user = req.user;
     const performedBy = user?.username || "unknown";
 
-    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
+    // ✅ ใช้ prefix เดียวกับ OPTX/Neon (OPTX หรือ NW-QT)
+    const companyPrefix = performedBy.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
 
     const currentYear = new Date().getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
