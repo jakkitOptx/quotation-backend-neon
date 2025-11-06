@@ -545,11 +545,14 @@ exports.resetQuotation = async (req, res) => {
     quotation.approvalStatus = "Pending";
     await quotation.save();
 
-    // ✅ บันทึก Log
-    const user = await User.findById(req.userId);
+    // ✅ บันทึก Log (ใช้ข้อมูลจาก token โดยไม่ต้อง query DB)
+    const user = req.user;
     const performedBy = user?.username || "unknown";
 
-    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
+    // ✅ ใช้ prefix เดียวกับ OPTX/Neon (OPTX หรือ NW-QT)
+    const companyPrefix = performedBy.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
 
     const currentYear = new Date().getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
@@ -781,4 +784,62 @@ exports.updateApprovalFlow = async (req, res) => {
   }
 };
 
+// ✅ อัปเดต department อัตโนมัติสำหรับเอกสารที่ยังเป็น N/A หรือ Unknown
+exports.fixMissingDepartments = async (req, res) => {
+  try {
+    // ✅ ดึงข้อมูลผู้ใช้งานจาก token
+    const tokenUser = await User.findById(req.userId);
+    const user =
+      tokenUser || (await User.findOne({ username: req.username || req.user?.username }));
 
+    // ✅ ตรวจสอบสิทธิ์ admin
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({
+        message: "Permission denied. Admin only.",
+        detail: "ไม่พบข้อมูลผู้ใช้ หรือสิทธิ์ไม่เพียงพอ",
+      });
+    }
+
+    // ✅ ดึงเอกสารทั้งหมดที่ department ยังไม่ถูกต้อง
+    const quotations = await Quotation.find({
+      $or: [
+        { department: "N/A" },
+        { department: "Unknown" },
+        { department: null },
+        { department: "" },
+      ],
+    });
+
+    if (quotations.length === 0) {
+      return res.status(200).json({ message: "✅ ไม่มีเอกสารที่ต้องอัปเดต" });
+    }
+
+    const updatedDocs = [];
+
+    for (const qt of quotations) {
+      const creator = await User.findOne({ username: qt.createdByUser });
+      if (creator && creator.department) {
+        qt.department = creator.department;
+        await qt.save();
+
+        updatedDocs.push({
+          id: qt._id,
+          runNumber: qt.runNumber,
+          createdBy: qt.createdByUser,
+          updatedTo: creator.department,
+        });
+      }
+    }
+
+    res.status(200).json({
+      message: `✅ อัปเดตสำเร็จ ${updatedDocs.length} เอกสาร`,
+      updatedDocs,
+    });
+  } catch (error) {
+    console.error("Error fixing departments:", error);
+    res.status(500).json({
+      message: "เกิดข้อผิดพลาดภายในระบบ",
+      error: error.message,
+    });
+  }
+};

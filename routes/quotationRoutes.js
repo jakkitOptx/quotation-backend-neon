@@ -25,7 +25,14 @@ router.get("/summary", quotationController.getQuotationsSummary);
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
 
-// ✅ อัปเดตใบเสนอราคา
+// ✅ อัปเดต department อัตโนมัติ (เฉพาะ admin)
+router.patch(
+  "/fix-departments",
+  authMiddleware, // ตรวจ token
+  quotationController.fixMissingDepartments
+);
+
+// ✅ อัปเดตใบเสนอราคา (Neon Version)
 router.patch("/:id", authMiddleware, async (req, res) => {
   const {
     title,
@@ -49,10 +56,11 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     isDetailedForm,
     isSpecialForm,
     numberOfSpecialPages,
-    approvalStatus 
+    approvalStatus,
   } = req.body;
 
   try {
+    // ✅ Validation
     if (!items || items.length === 0) {
       return res.status(400).json({ message: "Items must not be empty" });
     }
@@ -65,13 +73,13 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "Type is required" });
     }
 
-    // ✅ ค้นหา Quotation ปัจจุบัน
+    // ✅ ค้นหาใบเสนอราคาที่มีอยู่
     const existingQuotation = await Quotation.findById(req.params.id);
     if (!existingQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ ถ้า type เปลี่ยนไป ให้ตรวจสอบ runNumber ใหม่ และกำหนดเป็นเลข 3 หลัก
+    // ✅ ถ้า type เปลี่ยน → กำหนด runNumber ใหม่
     let runNumber = existingQuotation.runNumber;
     if (type !== existingQuotation.type) {
       const latestQuotation = await Quotation.findOne({ type }).sort({
@@ -82,7 +90,7 @@ router.patch("/:id", authMiddleware, async (req, res) => {
         : "001";
     }
 
-    // ✅ คำนวณตัวเลข
+    // ✅ คำนวณค่าเงินทั้งหมด
     let totalBeforeFee = 0;
     const processedItems = items.map((item) => {
       const unit = Number(item.unit) || 0;
@@ -91,14 +99,15 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       totalBeforeFee += amount;
       return { ...item, unitPrice, amount };
     });
-    // แก้สูตร
-    const calFee = roundUp(fee); // เพราะค่าที่ได้มาคือจำนวนเงิน fee ตรง ๆ แล้ว
+
+    // ✅ ฝั่ง Neon — ใช้ค่าคงที่ของ fee เป็น "จำนวนเงิน" ไม่ใช่เปอร์เซ็นต์
+    const calFee = roundUp(fee); // Neon ใช้ fee เป็นจำนวนเงินบาท
     const total = roundUp(totalBeforeFee + calFee);
     const amountBeforeTax = roundUp(total - discount);
     const vat = roundUp(amountBeforeTax * 0.07);
     const netAmount = roundUp(amountBeforeTax + vat);
 
-    // ✅ อัปเดต Quotation
+    // ✅ อัปเดตใบเสนอราคา
     const updatedQuotation = await Quotation.findByIdAndUpdate(
       req.params.id,
       {
@@ -131,7 +140,7 @@ router.patch("/:id", authMiddleware, async (req, res) => {
         isDetailedForm,
         isSpecialForm,
         numberOfSpecialPages,
-        approvalStatus
+        approvalStatus,
       },
       { new: true }
     );
@@ -139,12 +148,19 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     if (!updatedQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
     }
-    // ✅ เพิ่ม Log เมื่อแก้ไข Quotation
-    const user = await User.findById(req.userId);
+
+    // ✅ บันทึก Log (ใช้ req.user จาก token)
+    const user = req.user;
     const performedBy = user?.username || "unknown";
+
     const docYear = new Date(documentDate).getFullYear();
     const runFormatted = runNumber.padStart(3, "0");
-    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
+
+    // ✅ ใช้ prefix แบบเดียวกับระบบ Neon/OPTX
+    const companyPrefix = performedBy.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
+
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${runFormatted}`;
 
     await Log.create({
@@ -161,24 +177,32 @@ router.patch("/:id", authMiddleware, async (req, res) => {
   }
 });
 
-// ลบใบเสนอราคา
+// ✅ ลบใบเสนอราคา (Neon Version)
 router.delete("/:id", authMiddleware, async (req, res) => {
   try {
+    // ✅ ลบ Quotation ออกจากฐานข้อมูล
     const deletedQuotation = await Quotation.findByIdAndDelete(req.params.id);
-    if (!deletedQuotation)
+    if (!deletedQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
+    }
 
-    // ✅ ดึงผู้ใช้ที่ลบจาก token
-    const user = await User.findById(req.userId);
+    // ✅ ใช้ข้อมูลผู้ใช้จาก Token โดยตรง
+    const user = req.user;
     const performedBy = user?.username || "unknown";
 
-    // ✅ จัดรูปแบบเลขใบเสนอราคา
+    // ✅ จัดรูปแบบรหัสใบเสนอราคา (Prefix ตาม Email Domain)
     const docYear = new Date(deletedQuotation.documentDate).getFullYear();
-    const runFormatted = deletedQuotation.runNumber?.padStart(3, "0") || "???";
-    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
+    const runFormatted =
+      deletedQuotation.runNumber?.padStart(3, "0") || "???";
+
+    // ✅ Neon ใช้ prefix “NW-QT” ส่วน OPTX ใช้ “OPTX”
+    const companyPrefix = performedBy.includes("@optx")
+      ? "OPTX"
+      : "NW-QT";
+
     const qtNumber = `${companyPrefix}(${deletedQuotation.type})-${docYear}-${runFormatted}`;
 
-    // ✅ สร้าง Log การลบ
+    // ✅ บันทึก Log การลบ
     await Log.create({
       quotationId: deletedQuotation._id,
       action: "delete",
@@ -186,12 +210,13 @@ router.delete("/:id", authMiddleware, async (req, res) => {
       description: `Deleted quotation ${qtNumber}`,
     });
 
-    res.status(204).send();
+    res.status(204).send(); // No content
   } catch (error) {
     console.error("Error deleting quotation:", error.message);
     res.status(500).json({ message: error.message });
   }
 });
+
 
 // ค้นหาใบเสนอราคา
 router.get("/search", async (req, res) => {
