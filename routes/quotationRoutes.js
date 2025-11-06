@@ -25,6 +25,13 @@ router.get("/summary", quotationController.getQuotationsSummary);
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
 router.get("/paginated", quotationController.getQuotationsWithPagination);
 
+// ✅ อัปเดต department อัตโนมัติ (เฉพาะ admin)
+router.patch(
+  "/fix-departments",
+  authMiddleware, // ตรวจ token
+  quotationController.fixMissingDepartments
+);
+
 // ✅ อัปเดตใบเสนอราคา (Neon Version)
 router.patch("/:id", authMiddleware, async (req, res) => {
   const {
