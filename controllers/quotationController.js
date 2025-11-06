@@ -787,20 +787,21 @@ exports.updateApprovalFlow = async (req, res) => {
 // ✅ อัปเดต department อัตโนมัติสำหรับเอกสารที่ยังเป็น N/A หรือ Unknown
 exports.fixMissingDepartments = async (req, res) => {
   try {
-    // ✅ ดึงข้อมูลผู้ใช้งานจาก token
-    const tokenUser = await User.findById(req.userId);
-    const user =
-      tokenUser || (await User.findOne({ username: req.username || req.user?.username }));
+    console.time("fixMissingDepartments");
 
     // ✅ ตรวจสอบสิทธิ์ admin
-    if (!user || user.role !== "admin") {
+    const tokenUser =
+      (req.userId && (await User.findById(req.userId))) ||
+      (req.user?.username && (await User.findOne({ username: req.user.username })));
+
+    if (!tokenUser || tokenUser.role !== "admin") {
       return res.status(403).json({
         message: "Permission denied. Admin only.",
         detail: "ไม่พบข้อมูลผู้ใช้ หรือสิทธิ์ไม่เพียงพอ",
       });
     }
 
-    // ✅ ดึงเอกสารทั้งหมดที่ department ยังไม่ถูกต้อง
+    // ✅ ดึงเฉพาะเอกสารที่ department ยังไม่ถูกต้อง
     const quotations = await Quotation.find({
       $or: [
         { department: "N/A" },
@@ -808,35 +809,52 @@ exports.fixMissingDepartments = async (req, res) => {
         { department: null },
         { department: "" },
       ],
-    });
+    }).select("_id runNumber createdByUser department");
 
-    if (quotations.length === 0) {
+    if (!quotations.length) {
       return res.status(200).json({ message: "✅ ไม่มีเอกสารที่ต้องอัปเดต" });
     }
 
-    const updatedDocs = [];
+    // ✅ ดึงข้อมูลผู้ใช้ทั้งหมดที่เกี่ยวข้องเพียงครั้งเดียว (ลดจำนวน query)
+    const usernames = [...new Set(quotations.map((q) => q.createdByUser))];
+    const users = await User.find({ username: { $in: usernames } }).select("username department");
 
-    for (const qt of quotations) {
-      const creator = await User.findOne({ username: qt.createdByUser });
-      if (creator && creator.department) {
-        qt.department = creator.department;
-        await qt.save();
+    // ✅ ทำ mapping username → department
+    const deptMap = Object.fromEntries(users.map((u) => [u.username, u.department]));
 
-        updatedDocs.push({
-          id: qt._id,
-          runNumber: qt.runNumber,
-          createdBy: qt.createdByUser,
-          updatedTo: creator.department,
-        });
-      }
+    // ✅ เตรียม bulk operation
+    const bulkOps = quotations
+      .map((qt) => {
+        const newDept = deptMap[qt.createdByUser];
+        if (newDept && newDept !== qt.department) {
+          return {
+            updateOne: {
+              filter: { _id: qt._id },
+              update: { $set: { department: newDept } },
+            },
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    if (!bulkOps.length) {
+      return res.status(200).json({
+        message: "✅ ไม่มีเอกสารที่ต้องอัปเดตเพิ่มเติม",
+      });
     }
 
+    // ✅ ใช้ bulkWrite เพื่อ update ครั้งเดียว (เร็วมาก)
+    await Quotation.bulkWrite(bulkOps);
+
+    console.timeEnd("fixMissingDepartments");
+
     res.status(200).json({
-      message: `✅ อัปเดตสำเร็จ ${updatedDocs.length} เอกสาร`,
-      updatedDocs,
+      message: `✅ อัปเดตสำเร็จ ${bulkOps.length} เอกสาร`,
+      updatedCount: bulkOps.length,
     });
   } catch (error) {
-    console.error("Error fixing departments:", error);
+    console.error("❌ Error fixing departments:", error);
     res.status(500).json({
       message: "เกิดข้อผิดพลาดภายในระบบ",
       error: error.message,
