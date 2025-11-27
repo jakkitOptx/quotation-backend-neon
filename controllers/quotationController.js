@@ -550,9 +550,7 @@ exports.resetQuotation = async (req, res) => {
     const performedBy = user?.username || "unknown";
 
     // ✅ ใช้ prefix เดียวกับ OPTX/Neon (OPTX หรือ NW-QT)
-    const companyPrefix = performedBy.includes("@optx")
-      ? "OPTX"
-      : "NW-QT";
+    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
 
     const currentYear = new Date().getFullYear();
     const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
@@ -639,7 +637,7 @@ exports.duplicateQuotation = async (req, res) => {
       runNumber: newRunNumber,
       approvalStatus: "Pending",
       approvedBy: undefined,
-      approvalHierarchy: [], // ⬅️ สำคัญ: อย่า copy ของเก่า (กัน _id ซ้ำ และสถานะอนุมัติซ้ำ)
+      approvalHierarchy: [],
       items: sanitizedItems,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -647,13 +645,20 @@ exports.duplicateQuotation = async (req, res) => {
       cancelDate: null,
       reason: null,
       canceledBy: null,
-      // อัปเดตข้อมูล user ปัจจุบัน (ตามโค้ดเดิมของคุณ)
+
+      // 🟢 ใช้ของ original QT (ตาม logic เดิม)
       department: user.department,
       team: user.team || "",
       teamGroup: user.teamGroup || "",
-      // ✅ เพิ่มคำ "(Duplicated)" ใน title และ projectName
+
+      // 🟣 เพิ่ม "(Duplicated)"
       title: `${originalQT.title} (Duplicated)`,
       projectName: `${originalQT.projectName} (Duplicated)`,
+
+      // 🔥🔥🔥 FIX ตรงนี้เท่านั้น 🔥🔥🔥
+      createdByUser: req.user.username,
+      createBy: req.user.username,
+      proposedBy: req.user.username,
     };
 
     // ✅ สร้างเอกสารใหม่ (Mongo จะ gen _id ใหม่ให้อัตโนมัติ)
@@ -684,7 +689,6 @@ exports.duplicateQuotation = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
 // GET /quotations/summary?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 // สรุปยอด total / pending / approved ใน query เดียว
 exports.getQuotationsSummary = async (req, res) => {
@@ -729,8 +733,8 @@ exports.getQuotationsSummary = async (req, res) => {
 
 exports.updateApprovalFlow = async (req, res) => {
   try {
-    const { id } = req.params;        // quotationId
-    const { email } = req.body;       // user ที่จะใช้ flow ของเขา
+    const { id } = req.params; // quotationId
+    const { email } = req.body; // user ที่จะใช้ flow ของเขา
 
     const quotation = await Quotation.findById(id);
     if (!quotation)
@@ -792,7 +796,8 @@ exports.fixMissingDepartments = async (req, res) => {
     // ✅ ตรวจสอบสิทธิ์ admin
     const tokenUser =
       (req.userId && (await User.findById(req.userId))) ||
-      (req.user?.username && (await User.findOne({ username: req.user.username })));
+      (req.user?.username &&
+        (await User.findOne({ username: req.user.username })));
 
     if (!tokenUser || tokenUser.role !== "admin") {
       return res.status(403).json({
@@ -817,10 +822,14 @@ exports.fixMissingDepartments = async (req, res) => {
 
     // ✅ ดึงข้อมูลผู้ใช้ทั้งหมดที่เกี่ยวข้องเพียงครั้งเดียว (ลดจำนวน query)
     const usernames = [...new Set(quotations.map((q) => q.createdByUser))];
-    const users = await User.find({ username: { $in: usernames } }).select("username department");
+    const users = await User.find({ username: { $in: usernames } }).select(
+      "username department"
+    );
 
     // ✅ ทำ mapping username → department
-    const deptMap = Object.fromEntries(users.map((u) => [u.username, u.department]));
+    const deptMap = Object.fromEntries(
+      users.map((u) => [u.username, u.department])
+    );
 
     // ✅ เตรียม bulk operation
     const bulkOps = quotations

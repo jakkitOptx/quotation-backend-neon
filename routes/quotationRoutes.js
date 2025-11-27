@@ -333,7 +333,7 @@ router.patch("/:id/reason", async (req, res) => {
 router.patch("/:id/reset", authMiddleware, quotationController.resetQuotation);
 
 // ✅ Duplicate Quotation
-router.post("/:id/duplicate", quotationController.duplicateQuotation);
+router.post("/:id/duplicate", authMiddleware, quotationController.duplicateQuotation);
 
 // ✅ อัปเดต Flow ของใบเสนอราคาเดิมให้เป็น Flow ปัจจุบัน
 router.patch("/:id/update-approval-flow", quotationController.updateApprovalFlow);
