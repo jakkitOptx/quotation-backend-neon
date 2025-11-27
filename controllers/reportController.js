@@ -2,7 +2,7 @@
 const mongoose = require("mongoose");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
-const Client = require("../models/Client"); // ✅ เพิ่ม model
+const Client = require("../models/Client");
 
 exports.getDepartmentSpending = async (req, res) => {
   try {
@@ -31,17 +31,18 @@ exports.getDepartmentSpending = async (req, res) => {
         ? clientIds
         : clientIds.split(",").map((id) => id.trim());
 
-      // ✅ แปลงเป็น ObjectId เฉพาะที่ valid
-      const objectIds = clientArray
-        .filter((id) => mongoose.Types.ObjectId.isValid(id))
-        .map((id) => new mongoose.Types.ObjectId(id));
-
+      // 🔥 รองรับ 2 โครงสร้างของ clientId
       matchConditions.push({
-        clientId: { $in: objectIds },
+        $expr: {
+          $or: [
+            { $in: [ { $toString: "$clientId" }, clientArray ] },      // ObjectId แบบเดี่ยว
+            { $in: [ { $toString: "$clientId._id" }, clientArray ] },  // embedded object
+          ]
+        }
       });
     }
 
-    // ✅ จำกัดทีม (เฉพาะ user ระดับต่ำกว่า admin)
+    // จำกัดตามทีม
     if (role !== "admin" && level < 3) {
       const usersInTeam = await User.find({ team }).select("email");
       const allowedEmails = usersInTeam.map((u) => u.email);
@@ -49,9 +50,8 @@ exports.getDepartmentSpending = async (req, res) => {
     }
 
     const matchStage = { $and: matchConditions };
-    console.log("🟢 matchStage:", JSON.stringify(matchStage, null, 2));
 
-    // ✅ Aggregate pipeline แยกยอดตาม department
+    // Aggregate
     const quotations = await Quotation.aggregate([
       { $match: matchStage },
       {
@@ -69,7 +69,7 @@ exports.getDepartmentSpending = async (req, res) => {
       0
     );
 
-    // ✅ ดึงชื่อ client ทั้งหมดที่ส่งมา
+    // ดึง client ชื่อจริง
     let clientDetails = [];
     if (clientArray.length > 0) {
       clientDetails = await Client.find(
@@ -78,7 +78,6 @@ exports.getDepartmentSpending = async (req, res) => {
       ).lean();
     }
 
-    // ✅ Response
     res.status(200).json({
       success: true,
       year: selectedYear,
