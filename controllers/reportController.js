@@ -7,8 +7,15 @@ const Client = require("../models/Client");
 exports.getDepartmentSpending = async (req, res) => {
   try {
     const { email, level, role, team } = req.user;
-    const { year, clientIds } = req.query;
+    const { year, clientIds, useBeforeVat } = req.query;
+
     const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+
+    // ---------------------------------------------------------
+    // 👉 ใช้ total เมื่อเลือกใช้ยอดก่อน VAT
+    // ---------------------------------------------------------
+    const useBeforeVatFlag = useBeforeVat === "true";
+    const spendingField = useBeforeVatFlag ? "$total" : "$netAmount";
 
     const matchConditions = [
       {
@@ -31,18 +38,18 @@ exports.getDepartmentSpending = async (req, res) => {
         ? clientIds
         : clientIds.split(",").map((id) => id.trim());
 
-      // 🔥 รองรับ 2 โครงสร้างของ clientId
+      // 🔥 รองรับ 2 โครงสร้าง clientId
       matchConditions.push({
         $expr: {
           $or: [
-            { $in: [ { $toString: "$clientId" }, clientArray ] },      // ObjectId แบบเดี่ยว
-            { $in: [ { $toString: "$clientId._id" }, clientArray ] },  // embedded object
-          ]
-        }
+            { $in: [{ $toString: "$clientId" }, clientArray] },
+            { $in: [{ $toString: "$clientId._id" }, clientArray] },
+          ],
+        },
       });
     }
 
-    // จำกัดตามทีม
+    // จำกัดการดูตามทีม ถ้าไม่ใช่ admin
     if (role !== "admin" && level < 3) {
       const usersInTeam = await User.find({ team }).select("email");
       const allowedEmails = usersInTeam.map((u) => u.email);
@@ -51,13 +58,15 @@ exports.getDepartmentSpending = async (req, res) => {
 
     const matchStage = { $and: matchConditions };
 
-    // Aggregate
+    // ---------------------------------------------------------
+    // 👉 Aggregate โดยใช้ spendingField ที่ตั้งไว้ด้านบน
+    // ---------------------------------------------------------
     const quotations = await Quotation.aggregate([
       { $match: matchStage },
       {
         $group: {
           _id: "$department",
-          totalSpending: { $sum: "$netAmount" },
+          totalSpending: { $sum: spendingField },
           quotationCount: { $sum: 1 },
         },
       },
@@ -69,7 +78,7 @@ exports.getDepartmentSpending = async (req, res) => {
       0
     );
 
-    // ดึง client ชื่อจริง
+    // ดึงชื่อบริษัทลูกค้า
     let clientDetails = [];
     if (clientArray.length > 0) {
       clientDetails = await Client.find(
@@ -81,6 +90,7 @@ exports.getDepartmentSpending = async (req, res) => {
     res.status(200).json({
       success: true,
       year: selectedYear,
+      useBeforeVat: useBeforeVatFlag, // ส่งกลับไปให้ frontend รับรู้ด้วย
       filterClients: clientDetails.map((c) => ({
         _id: c._id,
         companyBaseName: c.companyBaseName || "Unknown",
