@@ -15,6 +15,8 @@ const roundUp = (num) => {
 
 // ✅ สร้างใบเสนอราคา พร้อม `clientId` และตรวจสอบ runNumber ที่หายไป
 router.post("/", quotationController.createQuotation);
+// ✅ สร้างใบเสนอราคา แบบ Inc + VAT
+router.post("/create-vat-included", quotationController.createQuotationVatIncluded);
 
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อม query year + email → ให้ controller จัดการ filter
 router.get("/", quotationController.getQuotations);

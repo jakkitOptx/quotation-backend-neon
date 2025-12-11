@@ -161,6 +161,150 @@ exports.createQuotation = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 };
+// ✅ CREATE Quotation - VAT-Included Form
+exports.createQuotationVatIncluded = async (req, res) => {
+  const {
+    title,
+    client,
+    clientId,
+    salePerson,
+    documentDate,
+    productName,
+    projectName,
+    period,
+    startDate,
+    endDate,
+    createBy,
+    proposedBy,
+    createdByUser,
+    type = "M",
+    vatIncludedItems,   // ⭐ items รูปแบบใหม่
+    discount = 0,
+    fee = 0,
+    remark = "",
+    CreditTerm = 0,
+    isDraft = false
+  } = req.body;
+
+  try {
+    if (!clientId)
+      return res.status(400).json({ message: "Client ID is required" });
+
+    if (!vatIncludedItems || vatIncludedItems.length === 0)
+      return res.status(400).json({ message: "Items must not be empty" });
+
+    if (!createdByUser)
+      return res.status(400).json({ message: "Created By User is required" });
+
+    const user = await User.findOne({ username: createdByUser });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // ⭐ คำนวณ items แบบ VAT-Included
+    let totalBeforeFee = 0;
+    const processedItems = vatIncludedItems.map((item, index) => {
+      if (!item.description)
+        throw new Error(`Item at index ${index} is missing description.`);
+      if (!item.vatIncludedPrice)
+        throw new Error(`Item at index ${index} has no VAT included price.`);
+
+      const vatIncluded = Number(item.vatIncludedPrice);
+      const unit = 1;
+
+      const unitPrice = roundUp(vatIncluded / 1.07); // ⭐ ตัด VAT
+      const amount = roundUp(unitPrice);
+      const vat = roundUp(vatIncluded - unitPrice);
+
+      totalBeforeFee += amount;
+
+      return {
+        description: item.description,
+        unit,
+        unitPrice,
+        amount,
+        vat: vat, // ✔ เก็บ VAT ต่อรายการ (optional)
+      };
+    });
+
+    // ⭐ คำนวณ Fee + Discount + VAT + Net แบบ logic เดิม
+    const calFee = roundUp(totalBeforeFee * (fee / 100));
+    const total = roundUp(totalBeforeFee + calFee);
+    const amountBeforeTax = roundUp(total - discount);
+    const vat = roundUp(amountBeforeTax * 0.07);
+    const netAmount = roundUp(amountBeforeTax + vat);
+
+    // ⭐ RunNumber เหมือนเดิม
+    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
+
+    const existing = await Quotation.find({ type }).select("runNumber");
+    const existingRunNumbers = existing.map((q) => Number(q.runNumber));
+
+    let newRunNumber = "001";
+    for (let i = startRunNumber; i <= 999; i++) {
+      if (!existingRunNumbers.includes(i)) {
+        newRunNumber = String(i).padStart(3, "0");
+        break;
+      }
+    }
+
+    // ⭐ สร้าง quotation ใหม่
+    const quotation = new Quotation({
+      title,
+      client,
+      clientId,
+      salePerson,
+      documentDate,
+      productName,
+      projectName,
+      period,
+      startDate,
+      endDate,
+      createBy,
+      proposedBy,
+      createdByUser,
+      department: user.department,
+      team: user.team || "",
+      teamGroup: user.teamGroup || "",
+
+      amount: totalBeforeFee,
+      totalBeforeFee,
+      calFee,
+      total,
+      discount,
+      amountBeforeTax,
+      vat,
+      netAmount,
+
+      type,
+      runNumber: newRunNumber,
+      items: processedItems,
+      approvalStatus: isDraft ? "Draft" : "Pending",
+      remark,
+      CreditTerm,
+      isVatIncludedForm: true, // ⭐ สำคัญ
+    });
+
+    await quotation.save();
+
+    // ⭐ Log
+    const companyPrefix = createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
+    const docYear = new Date(documentDate).getFullYear();
+    const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
+
+    await Log.create({
+      quotationId: quotation._id,
+      action: isDraft ? "save_draft" : "create",
+      performedBy: createdByUser,
+      description: `Created VAT-Included quotation ${qtNumber}`,
+    });
+
+    res.status(201).json(quotation);
+  } catch (error) {
+    console.error("Error creating VAT-Included QT:", error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
 
 exports.getQuotations = async (req, res) => {
   try {

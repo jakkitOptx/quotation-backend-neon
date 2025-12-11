@@ -1,4 +1,4 @@
-// Quotation.js
+//  Model/Quotation.js
 const mongoose = require("mongoose");
 const _ = require("lodash"); // ✅ Import lodash
 
