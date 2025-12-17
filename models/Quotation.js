@@ -68,6 +68,7 @@ const QuotationSchema = new mongoose.Schema({
   CreditTerm: { type: Number, default: 0 },
   isDetailedForm: { type: Boolean, default: false }, // ✅ เพิ่มฟิลด์นี้เพื่อระบุประเภทฟอร์ม
   isSpecialForm: { type: Boolean, default: false }, // ฟอร์มแบบพิเศษ
+  isVatIncludedForm: { type: Boolean, default: false }, // ฟอร์มแบบ Inc+VAT
   numberOfSpecialPages: { type: Number, default: 1 }, // จำนวนหน้าของฟอร์มแบบพิเศษ
 });
 

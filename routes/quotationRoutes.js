@@ -15,7 +15,8 @@ const roundUp = (num) => {
 
 // ✅ สร้างใบเสนอราคา พร้อม `clientId` และตรวจสอบ runNumber ที่หายไป
 router.post("/", quotationController.createQuotation);
-
+// ✅ สร้างใบเสนอราคา แบบ Inc + VAT
+router.post("/create-vat-included", quotationController.createQuotationVatIncluded);
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อม query year + email → ให้ controller จัดการ filter
 router.get("/", quotationController.getQuotations);
 
@@ -342,7 +343,7 @@ router.get("/:id", async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages isVatIncludedForm"
       )
 
       .populate({

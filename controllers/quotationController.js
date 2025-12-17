@@ -161,6 +161,196 @@ exports.createQuotation = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 };
+// ✅ CREATE Quotation - VAT Included Form (INC + VAT)
+exports.createQuotationVatIncluded = async (req, res) => {
+  const {
+    title,
+    client,
+    clientId,
+    salePerson,
+    documentDate,
+    productName,
+    projectName,
+    period,
+    startDate,
+    endDate,
+    createBy,
+    proposedBy,
+    createdByUser, // ⭐ email เสมอ
+    type = "M",
+    vatIncludedItems, // ⭐ items แบบรวม VAT
+    discount = 0,
+    fee = 0,
+    remark = "",
+    CreditTerm = 0,
+    isDraft = false,
+  } = req.body;
+
+  try {
+    // ------------------------- VALIDATION -------------------------
+    if (!clientId) {
+      return res.status(400).json({ message: "Client ID is required" });
+    }
+
+    if (!vatIncludedItems || vatIncludedItems.length === 0) {
+      return res.status(400).json({ message: "Items must not be empty" });
+    }
+
+    if (!createdByUser) {
+      return res.status(400).json({ message: "Created By User is required" });
+    }
+
+    const normalizedCreatedByUser = createdByUser.trim();
+
+    const user = await User.findOne({
+      $or: [
+        { email: normalizedCreatedByUser },
+        { username: normalizedCreatedByUser },
+      ],
+    });
+    console.log("RAW:", createdByUser);
+    console.log("TRIM:", createdByUser.trim());
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const safeDiscount = roundUp(Number(discount) || 0);
+    const safeFee = Number(fee) || 0;
+
+    // ------------------------- ITEM CALCULATION -------------------------
+    let totalBeforeFee = 0;
+
+    const processedItems = vatIncludedItems.map((item, index) => {
+      if (!item.description) {
+        throw new Error(`Item at index ${index} is missing description.`);
+      }
+
+      if (
+        item.vatIncludedPrice === undefined ||
+        item.vatIncludedPrice === null
+      ) {
+        throw new Error(`Item at index ${index} has no VAT included price.`);
+      }
+
+      const unit = Number(item.unit) || 1;
+      const unitPrice = roundUp(Number(item.vatIncludedPrice)); // ⭐ ราคาแบบรวม VAT
+      const amount = roundUp(unit * unitPrice); // ⭐ รวม VAT
+
+      totalBeforeFee = roundUp(totalBeforeFee + amount);
+
+      return {
+        description: item.description,
+        unit,
+        unitPrice, // ⭐ เก็บแบบรวม VAT
+        amount, // ⭐ รวม VAT
+      };
+    });
+
+    // ------------------------- FEE LOGIC -------------------------
+    // OPTX = fee เป็น %, NEON = fee เป็นบาท
+    const company = (user.company || "").toUpperCase();
+
+    let calFee = 0;
+    if (company === "OPTX") {
+      calFee = roundUp(totalBeforeFee * (safeFee / 100));
+    } else {
+      calFee = roundUp(safeFee);
+    }
+
+    // ------------------------- TOTAL (INC + VAT) -------------------------
+    // รวมยอดที่ "รวม VAT อยู่แล้ว"
+    const total = roundUp(totalBeforeFee + calFee);
+
+    // หักส่วนลดจากยอดรวม
+    const discountedTotal = roundUp(total - safeDiscount);
+
+    // ⭐ แตก VAT ออก (จากยอดที่รวม VAT แล้ว)
+    const amountBeforeTax = roundUp(discountedTotal / 1.07);
+    const vat = roundUp(discountedTotal - amountBeforeTax);
+
+    // ⭐ ยอดสุดท้ายที่ลูกค้าจ่ายจริง
+    const netAmount = discountedTotal;
+
+    // ------------------------- RUN NUMBER -------------------------
+    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey], 10) || 1;
+
+    const existing = await Quotation.find({ type }).select("runNumber");
+    const existingRunNumbers = existing
+      .map((q) => Number(q.runNumber))
+      .filter((n) => !Number.isNaN(n));
+
+    let newRunNumber = "001";
+    for (let i = startRunNumber; i <= 999; i++) {
+      if (!existingRunNumbers.includes(i)) {
+        newRunNumber = String(i).padStart(3, "0");
+        break;
+      }
+    }
+
+    // ------------------------- SAVE QUOTATION -------------------------
+    const quotation = new Quotation({
+      title,
+      client,
+      clientId,
+      salePerson,
+      documentDate,
+      productName,
+      projectName,
+      period,
+      startDate,
+      endDate,
+      createBy,
+      proposedBy,
+      createdByUser, // ⭐ email
+
+      department: user.department,
+      team: user.team || "",
+      teamGroup: user.teamGroup || "",
+
+      // ⭐ dashboard ใช้ยอดสุดท้ายจริง
+      amount: netAmount,
+
+      totalBeforeFee,
+      fee: roundUp(safeFee),
+      calFee,
+      total,
+      discount: safeDiscount,
+      amountBeforeTax,
+      vat,
+      netAmount,
+
+      type,
+      runNumber: newRunNumber,
+      items: processedItems,
+
+      approvalStatus: isDraft ? "Draft" : "Pending",
+      remark,
+      CreditTerm,
+
+      isVatIncludedForm: true, // ⭐ สำคัญมาก
+    });
+
+    await quotation.save();
+
+    // ------------------------- LOGGING -------------------------
+    const companyPrefix = company === "OPTX" ? "OPTX" : "NW-QT";
+    const docYear = new Date(documentDate).getFullYear();
+    const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
+
+    await Log.create({
+      quotationId: quotation._id,
+      action: isDraft ? "save_draft" : "create",
+      performedBy: createdByUser,
+      description: `Created VAT-Included quotation ${qtNumber}`,
+    });
+
+    res.status(201).json(quotation);
+  } catch (error) {
+    console.error("Error creating VAT-Included QT:", error);
+    res.status(400).json({ message: error.message });
+  }
+};
 
 exports.getQuotations = async (req, res) => {
   try {
