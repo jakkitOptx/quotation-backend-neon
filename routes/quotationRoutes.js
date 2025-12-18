@@ -33,7 +33,7 @@ router.patch(
   quotationController.fixMissingDepartments
 );
 
-// ✅ อัปเดตใบเสนอราคา (Neon Version)
+// ✅ อัปเดตใบเสนอราคา (Neon Version รองรับ INC + VAT)
 router.patch("/:id", authMiddleware, async (req, res) => {
   const {
     title,
@@ -50,18 +50,21 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     proposedBy,
     items,
     discount = 0,
-    fee = 0,
+    fee = 0, // ⭐ Neon = บาท
     remark = "",
     CreditTerm = 0,
     type,
-    isDetailedForm,
-    isSpecialForm,
-    numberOfSpecialPages,
+    isDetailedForm = false,
+    isSpecialForm = false,
+    isVatIncludedForm = false, // ⭐ เพิ่ม
+    numberOfSpecialPages = 1,
     approvalStatus,
   } = req.body;
 
   try {
+    // -------------------------
     // ✅ Validation
+    // -------------------------
     if (!items || items.length === 0) {
       return res.status(400).json({ message: "Items must not be empty" });
     }
@@ -74,41 +77,76 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "Type is required" });
     }
 
-    // ✅ ค้นหาใบเสนอราคาที่มีอยู่
     const existingQuotation = await Quotation.findById(req.params.id);
     if (!existingQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ ถ้า type เปลี่ยน → กำหนด runNumber ใหม่
+    // -------------------------
+    // 🔁 RUN NUMBER (ถ้าเปลี่ยน type)
+    // -------------------------
     let runNumber = existingQuotation.runNumber;
     if (type !== existingQuotation.type) {
-      const latestQuotation = await Quotation.findOne({ type }).sort({
-        runNumber: -1,
-      });
-      runNumber = latestQuotation
-        ? String(Number(latestQuotation.runNumber) + 1).padStart(3, "0")
+      const latest = await Quotation.findOne({ type }).sort({ runNumber: -1 });
+      runNumber = latest
+        ? String(Number(latest.runNumber) + 1).padStart(3, "0")
         : "001";
     }
 
-    // ✅ คำนวณค่าเงินทั้งหมด
+    // -------------------------
+    // 🧮 ITEM CALCULATION
+    // -------------------------
     let totalBeforeFee = 0;
+
     const processedItems = items.map((item) => {
-      const unit = Number(item.unit) || 0;
-      const unitPrice = roundUp(parseFloat(item.unitPrice) || 0);
+      const unit = Number(item.unit) || 1; // ⭐ default = 1
+      const unitPrice = roundUp(Number(item.unitPrice) || 0);
       const amount = roundUp(unit * unitPrice);
-      totalBeforeFee += amount;
-      return { ...item, unitPrice, amount };
+
+      totalBeforeFee = roundUp(totalBeforeFee + amount);
+
+      return {
+        ...item,
+        unit,
+        unitPrice,
+        amount,
+      };
     });
 
-    // ✅ ฝั่ง Neon — ใช้ค่าคงที่ของ fee เป็น "จำนวนเงิน" ไม่ใช่เปอร์เซ็นต์
-    const calFee = roundUp(fee); // Neon ใช้ fee เป็นจำนวนเงินบาท
-    const total = roundUp(totalBeforeFee + calFee);
-    const amountBeforeTax = roundUp(total - discount);
-    const vat = roundUp(amountBeforeTax * 0.07);
-    const netAmount = roundUp(amountBeforeTax + vat);
+    const safeDiscount = roundUp(Number(discount) || 0);
+    const safeFee = roundUp(Number(fee) || 0); // ⭐ Neon = บาท
 
-    // ✅ อัปเดตใบเสนอราคา
+    let calFee = 0;
+    let total = 0;
+    let amountBeforeTax = 0;
+    let vat = 0;
+    let netAmount = 0;
+
+    // -------------------------
+    // ⭐ INC + VAT (Neon)
+    // -------------------------
+    if (isVatIncludedForm) {
+      calFee = safeFee; // ⭐ Neon = บวกตรง
+      total = roundUp(totalBeforeFee + calFee);
+      netAmount = roundUp(total - safeDiscount);
+
+      amountBeforeTax = roundUp(netAmount / 1.07);
+      vat = roundUp(netAmount - amountBeforeTax);
+    }
+    // -------------------------
+    // 🔵 EXC VAT (Neon เดิม)
+    // -------------------------
+    else {
+      calFee = safeFee; // ⭐ Neon = บาท
+      total = roundUp(totalBeforeFee + calFee);
+      amountBeforeTax = roundUp(total - safeDiscount);
+      vat = roundUp(amountBeforeTax * 0.07);
+      netAmount = roundUp(amountBeforeTax + vat);
+    }
+
+    // -------------------------
+    // 💾 UPDATE QUOTATION
+    // -------------------------
     const updatedQuotation = await Quotation.findByIdAndUpdate(
       req.params.id,
       {
@@ -124,22 +162,26 @@ router.patch("/:id", authMiddleware, async (req, res) => {
         endDate,
         createBy,
         proposedBy,
-        discount: roundUp(discount),
-        fee: roundUp(fee),
-        calFee,
-        amount: totalBeforeFee,
+
+        amount: netAmount, // ⭐ dashboard ใช้ยอดสุดท้าย
         totalBeforeFee,
+        fee: safeFee,
+        calFee,
         total,
+        discount: safeDiscount,
         amountBeforeTax,
         vat,
         netAmount,
-        remark,
-        CreditTerm,
+
         type,
         runNumber,
         items: processedItems,
+
+        remark,
+        CreditTerm,
         isDetailedForm,
         isSpecialForm,
+        isVatIncludedForm, // ⭐ สำคัญ
         numberOfSpecialPages,
         approvalStatus,
       },
@@ -150,14 +192,14 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ บันทึก Log (ใช้ req.user จาก token)
+    // -------------------------
+    // 📝 LOG
+    // -------------------------
     const user = req.user;
     const performedBy = user?.username || "unknown";
-
     const docYear = new Date(documentDate).getFullYear();
     const runFormatted = runNumber.padStart(3, "0");
 
-    // ✅ ใช้ prefix แบบเดียวกับระบบ Neon/OPTX
     const companyPrefix = performedBy.includes("@optx")
       ? "OPTX"
       : "NW-QT";
@@ -173,7 +215,7 @@ router.patch("/:id", authMiddleware, async (req, res) => {
 
     res.status(200).json(updatedQuotation);
   } catch (error) {
-    console.error("Error updating quotation:", error);
+    console.error("Error updating quotation (Neon):", error);
     res.status(400).json({ message: error.message });
   }
 });

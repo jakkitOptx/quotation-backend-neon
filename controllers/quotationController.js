@@ -768,26 +768,25 @@ exports.duplicateQuotation = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // ใช้ .lean() เพื่อได้ plain object (จัดการ field ได้ง่ายและป้องกัน accidental save)
     const originalQT = await Quotation.findById(id).lean();
     if (!originalQT) {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ ดึงข้อมูล user ที่เป็นเจ้าของเอกสาร (ตาม logic เดิมของคุณ)
+    // ✅ ดึง user เจ้าของเอกสารเดิม
     const user = await User.findOne({ username: originalQT.createdByUser });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ ออกเลข runNumber ใหม่ (logic เดิม)
+    // ----------------------------
+    // 🔁 RUN NUMBER (logic เดิม)
+    // ----------------------------
     const type = originalQT.type || "M";
     const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
     const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
 
-    const existingQuotations = await Quotation.find({ type }).select(
-      "runNumber"
-    );
+    const existingQuotations = await Quotation.find({ type }).select("runNumber");
     const existingRunNumbers = existingQuotations.map((q) =>
       Number(q.runNumber)
     );
@@ -800,10 +799,9 @@ exports.duplicateQuotation = async (req, res) => {
       }
     }
 
-    // ✅ เตรียมข้อมูลสำหรับเอกสารใหม่
-    //    - ลบ _id, id, createdAt, updatedAt เดิม
-    //    - ล้าง approvalHierarchy (อย่าอ้างอิงของเดิม)
-    //    - ลบ _id ของ items ทุกตัว
+    // ----------------------------
+    // 🧹 SANITIZE ITEMS
+    // ----------------------------
     const sanitizedItems = (originalQT.items || []).map((it) => {
       const { _id, id, ...rest } = it;
       return { ...rest };
@@ -818,43 +816,70 @@ exports.duplicateQuotation = async (req, res) => {
       approvedBy,
       cancelDate,
       canceledBy,
-      reason, // จะรีเซ็ตค่าใหม่
+      reason,
       ...restOriginal
     } = originalQT;
 
+    // ----------------------------
+    // ⭐ DUPLICATE PAYLOAD (NEON)
+    // ----------------------------
     const duplicatedPayload = {
       ...restOriginal,
+
+      // 🔢 run ใหม่
       runNumber: newRunNumber,
+
+      // 🔁 reset workflow
       approvalStatus: "Pending",
-      approvedBy: undefined,
       approvalHierarchy: [],
-      items: sanitizedItems,
+      approvedBy: undefined,
+      cancelDate: null,
+      canceledBy: null,
+      reason: null,
+
+      // 📄 metadata ใหม่
       createdAt: new Date(),
       updatedAt: new Date(),
       documentDate: new Date(),
-      cancelDate: null,
-      reason: null,
-      canceledBy: null,
 
-      // 🟢 ใช้ของ original QT (ตาม logic เดิม)
+      // 👤 ownership ใหม่
+      createdByUser: req.user.username,
+      createBy: req.user.username,
+      proposedBy: req.user.username,
+
+      // 🧩 org (logic เดิม)
       department: user.department,
       team: user.team || "",
       teamGroup: user.teamGroup || "",
 
-      // 🟣 เพิ่ม "(Duplicated)"
+      // 📦 items
+      items: sanitizedItems,
+
+      // 🟣 ชื่อ
       title: `${originalQT.title} (Duplicated)`,
       projectName: `${originalQT.projectName} (Duplicated)`,
 
-      // 🔥🔥🔥 FIX ตรงนี้เท่านั้น 🔥🔥🔥
-      createdByUser: req.user.username,
-      createBy: req.user.username,
-      proposedBy: req.user.username,
+      // ============================
+      // 🔥🔥🔥 สำคัญที่สุด (NEON) 🔥🔥🔥
+      // ============================
+      isVatIncludedForm: originalQT.isVatIncludedForm || false,
+
+      amount: originalQT.amount,
+      totalBeforeFee: originalQT.totalBeforeFee,
+      fee: originalQT.fee,        // ⭐ Neon = บาท
+      calFee: originalQT.calFee,
+      total: originalQT.total,
+      discount: originalQT.discount,
+      amountBeforeTax: originalQT.amountBeforeTax,
+      vat: originalQT.vat,
+      netAmount: originalQT.netAmount,
     };
 
-    // ✅ สร้างเอกสารใหม่ (Mongo จะ gen _id ใหม่ให้อัตโนมัติ)
     const duplicatedQT = await Quotation.create(duplicatedPayload);
 
-    // ✅ Log การ duplicate (logic เดิม)
+    // ----------------------------
+    // 📝 LOG
+    // ----------------------------
     const companyPrefix = originalQT.createdByUser.includes("@optx")
       ? "OPTX"
       : "NW-QT";
@@ -875,7 +900,7 @@ exports.duplicateQuotation = async (req, res) => {
       message: "Duplicated successfully",
     });
   } catch (error) {
-    console.error("Error duplicating quotation:", error);
+    console.error("Error duplicating quotation (Neon):", error);
     res.status(500).json({ message: error.message });
   }
 };
