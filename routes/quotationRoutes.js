@@ -32,7 +32,7 @@ router.patch(
   quotationController.fixMissingDepartments
 );
 
-// ✅ อัปเดตใบเสนอราคา (Neon Version)
+// ✅ อัปเดตใบเสนอราคา (Neon Version) — แก้ runNumber ให้รองรับเปลี่ยนปี/เปลี่ยน type และหาเลขว่าง
 router.patch("/:id", authMiddleware, async (req, res) => {
   const {
     title,
@@ -59,8 +59,41 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     approvalStatus,
   } = req.body;
 
+  // ---- helper: หา runNumber ว่างตาม (type + year) โดย exclude เอกสารตัวเอง ----
+  const getAvailableRunNumberByTypeAndYear = async ({
+    type,
+    year,
+    excludeId,
+  }) => {
+    const startRunEnvKey = `START_RUN_${String(type).toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey], 10) || 1;
+
+    const start = new Date(`${year}-01-01T00:00:00.000Z`);
+    const end = new Date(`${year + 1}-01-01T00:00:00.000Z`);
+
+    const query = {
+      type,
+      documentDate: { $gte: start, $lt: end },
+    };
+
+    if (excludeId) query._id = { $ne: excludeId };
+
+    const existing = await Quotation.find(query).select("runNumber");
+    const existingRunNumbers = existing
+      .map((q) => Number(q.runNumber))
+      .filter((n) => !Number.isNaN(n));
+
+    for (let i = startRunNumber; i <= 999; i++) {
+      if (!existingRunNumbers.includes(i)) {
+        return String(i).padStart(3, "0");
+      }
+    }
+
+    throw new Error("Run number exceeded (no available runNumber left)");
+  };
+
   try {
-    // ✅ Validation
+    // ✅ Validation (คงเดิม)
     if (!items || items.length === 0) {
       return res.status(400).json({ message: "Items must not be empty" });
     }
@@ -73,24 +106,38 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "Type is required" });
     }
 
+    if (!documentDate) {
+      return res.status(400).json({ message: "Document Date is required" });
+    }
+
     // ✅ ค้นหาใบเสนอราคาที่มีอยู่
     const existingQuotation = await Quotation.findById(req.params.id);
     if (!existingQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ ถ้า type เปลี่ยน → กำหนด runNumber ใหม่
-    let runNumber = existingQuotation.runNumber;
-    if (type !== existingQuotation.type) {
-      const latestQuotation = await Quotation.findOne({ type }).sort({
-        runNumber: -1,
-      });
-      runNumber = latestQuotation
-        ? String(Number(latestQuotation.runNumber) + 1).padStart(3, "0")
-        : "001";
+    // ✅ เช็คปีเดิม vs ปีใหม่
+    const oldYear = new Date(existingQuotation.documentDate).getFullYear();
+    const newYear = new Date(documentDate).getFullYear();
+
+    if (Number.isNaN(newYear)) {
+      return res.status(400).json({ message: "Invalid documentDate" });
     }
 
-    // ✅ คำนวณค่าเงินทั้งหมด
+    // ✅ ถ้าเปลี่ยน type หรือเปลี่ยนปี → หา runNumber ใหม่แบบ “เลขว่าง”
+    let runNumber = existingQuotation.runNumber;
+    const typeChanged = type !== existingQuotation.type;
+    const yearChanged = newYear !== oldYear;
+
+    if (typeChanged || yearChanged) {
+      runNumber = await getAvailableRunNumberByTypeAndYear({
+        type,
+        year: newYear,
+        excludeId: existingQuotation._id,
+      });
+    }
+
+    // ✅ คำนวณค่าเงินทั้งหมด (คงเดิม)
     let totalBeforeFee = 0;
     const processedItems = items.map((item) => {
       const unit = Number(item.unit) || 0;
@@ -100,8 +147,8 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return { ...item, unitPrice, amount };
     });
 
-    // ✅ ฝั่ง Neon — ใช้ค่าคงที่ของ fee เป็น "จำนวนเงิน" ไม่ใช่เปอร์เซ็นต์
-    const calFee = roundUp(fee); // Neon ใช้ fee เป็นจำนวนเงินบาท
+    // ✅ ฝั่ง Neon — ใช้ค่าคงที่ของ fee เป็น "จำนวนเงิน" ไม่ใช่เปอร์เซ็นต์ (คงเดิม)
+    const calFee = roundUp(fee);
     const total = roundUp(totalBeforeFee + calFee);
     const amountBeforeTax = roundUp(total - discount);
     const vat = roundUp(amountBeforeTax * 0.07);
@@ -149,18 +196,14 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
-    // ✅ บันทึก Log (ใช้ req.user จาก token)
+    // ✅ บันทึก Log (คงเดิม)
     const user = req.user;
     const performedBy = user?.username || "unknown";
 
     const docYear = new Date(documentDate).getFullYear();
-    const runFormatted = runNumber.padStart(3, "0");
+    const runFormatted = String(runNumber).padStart(3, "0");
 
-    // ✅ ใช้ prefix แบบเดียวกับระบบ Neon/OPTX
-    const companyPrefix = performedBy.includes("@optx")
-      ? "OPTX"
-      : "NW-QT";
-
+    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${runFormatted}`;
 
     await Log.create({
