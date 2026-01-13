@@ -10,7 +10,8 @@ const roundUp = (num) => {
   return (num * 100) % 1 >= 0.5 ? _.ceil(num, 2) : _.round(num, 2);
 };
 
-// ✅ สร้างใบ Quotation ใหม่ (version ใส่ department + รองรับ Draft)
+// ✅ สร้างใบ Quotation ใหม่ (Neonworks version ใส่ department + รองรับ Draft)
+// FIX: runNumber แยกตามปี (documentDate) ไม่เอาปีเก่ามาปนปีใหม่
 exports.createQuotation = async (req, res) => {
   const {
     title,
@@ -52,6 +53,10 @@ exports.createQuotation = async (req, res) => {
       return res.status(400).json({ message: "Created By User is required" });
     }
 
+    if (!documentDate) {
+      return res.status(400).json({ message: "Document Date is required" });
+    }
+
     // ✅ หา User เพื่อนำ department มาใส่ Quotation
     const user = await User.findOne({ username: createdByUser });
     if (!user) {
@@ -72,24 +77,35 @@ exports.createQuotation = async (req, res) => {
       totalBeforeFee += amount;
       return { ...item, unitPrice, amount };
     });
-    // แก้สูตร
-    // ✅ คำนวณ fee, total, amountBeforeTax, vat, netAmount
+
+    // ✅ Neon: fee เป็น "จำนวนเงิน" (ห้ามเปลี่ยน)
     const calFee = roundUp(fee); // ใช้จำนวนเงิน fee ที่ถูกส่งมาจาก frontend
     const total = roundUp(totalBeforeFee + calFee);
     const amountBeforeTax = roundUp(total - discount);
     const vat = roundUp(amountBeforeTax * 0.07);
     const netAmount = roundUp(amountBeforeTax + vat);
 
-    // ✅ หา runNumber ที่ว่างอยู่ใน type นั้น และเริ่มจากค่าใน .env
-    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
-    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
+    // ✅ ใช้ปีจาก documentDate (สำคัญมากสำหรับ runNumber)
+    const docYear = new Date(documentDate).getFullYear();
+    if (Number.isNaN(docYear)) {
+      return res.status(400).json({ message: "Invalid documentDate" });
+    }
 
-    const existingQuotations = await Quotation.find({ type }).select(
-      "runNumber"
-    );
-    const existingRunNumbers = existingQuotations.map((q) =>
-      Number(q.runNumber)
-    );
+    // ✅ หา runNumber ที่ว่างอยู่ใน type + ปีนั้น และเริ่มจากค่าใน .env
+    const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
+    const startRunNumber = parseInt(process.env[startRunEnvKey], 10) || 1;
+
+    const yearStart = new Date(`${docYear}-01-01T00:00:00.000Z`);
+    const yearEnd = new Date(`${docYear + 1}-01-01T00:00:00.000Z`);
+
+    const existingQuotations = await Quotation.find({
+      type,
+      documentDate: { $gte: yearStart, $lt: yearEnd },
+    }).select("runNumber");
+
+    const existingRunNumbers = existingQuotations
+      .map((q) => Number(q.runNumber))
+      .filter((n) => !Number.isNaN(n));
 
     let newRunNumber = "001";
     for (let i = startRunNumber; i <= 999; i++) {
@@ -131,7 +147,7 @@ exports.createQuotation = async (req, res) => {
       type,
       runNumber: newRunNumber,
       items: processedItems,
-      approvalStatus: isDraft ? "Draft" : "Pending", // ✅ ถ้า isDraft = true ให้เป็น Draft
+      approvalStatus: isDraft ? "Draft" : "Pending",
       remark,
       CreditTerm,
       isDetailedForm,
@@ -141,9 +157,8 @@ exports.createQuotation = async (req, res) => {
 
     await quotation.save();
 
-    // ✅ สร้าง log
+    // ✅ สร้าง log (ใช้ docYear ที่คำนวณไว้แล้ว)
     const companyPrefix = createdByUser.includes("@optx") ? "OPTX" : "NW-QT";
-    const docYear = new Date(documentDate).getFullYear();
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
 
     await Log.create({
@@ -161,6 +176,7 @@ exports.createQuotation = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 };
+
 
 exports.getQuotations = async (req, res) => {
   try {
@@ -590,17 +606,25 @@ exports.duplicateQuotation = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ ออกเลข runNumber ใหม่ (logic เดิม)
+    // ✅ ออกเลข runNumber ใหม่ (FIX: ดูเฉพาะปีปัจจุบัน ไม่เอาปีก่อนมาปน)
     const type = originalQT.type || "M";
     const startRunEnvKey = `START_RUN_${type.toUpperCase()}`;
-    const startRunNumber = parseInt(process.env[startRunEnvKey]) || 1;
+    const startRunNumber = parseInt(process.env[startRunEnvKey], 10) || 1;
 
-    const existingQuotations = await Quotation.find({ type }).select(
-      "runNumber"
-    );
-    const existingRunNumbers = existingQuotations.map((q) =>
-      Number(q.runNumber)
-    );
+    // ปีปัจจุบัน (เพราะ duplicate จะ set documentDate = new Date())
+    const docYear = new Date().getFullYear();
+    const yearStart = new Date(`${docYear}-01-01T00:00:00.000Z`);
+    const yearEnd = new Date(`${docYear + 1}-01-01T00:00:00.000Z`);
+
+    // ✅ สำคัญ: filter ตาม type + ปีปัจจุบันเท่านั้น
+    const existingQuotations = await Quotation.find({
+      type,
+      documentDate: { $gte: yearStart, $lt: yearEnd },
+    }).select("runNumber");
+
+    const existingRunNumbers = existingQuotations
+      .map((q) => Number(q.runNumber))
+      .filter((n) => !Number.isNaN(n));
 
     let newRunNumber = "001";
     for (let i = startRunNumber; i <= 999; i++) {
@@ -655,7 +679,7 @@ exports.duplicateQuotation = async (req, res) => {
       title: `${originalQT.title} (Duplicated)`,
       projectName: `${originalQT.projectName} (Duplicated)`,
 
-      // 🔥🔥🔥 FIX ตรงนี้เท่านั้น 🔥🔥🔥
+      // 🔥 FIX เดิมของคุณ
       createdByUser: req.user.username,
       createBy: req.user.username,
       proposedBy: req.user.username,
@@ -664,11 +688,10 @@ exports.duplicateQuotation = async (req, res) => {
     // ✅ สร้างเอกสารใหม่ (Mongo จะ gen _id ใหม่ให้อัตโนมัติ)
     const duplicatedQT = await Quotation.create(duplicatedPayload);
 
-    // ✅ Log การ duplicate (logic เดิม)
+    // ✅ Log การ duplicate (คง logic เดิม แต่ใช้ docYear ปีปัจจุบันให้ตรงกับเลข)
     const companyPrefix = originalQT.createdByUser.includes("@optx")
       ? "OPTX"
       : "NW-QT";
-    const docYear = new Date().getFullYear();
     const qtNumber = `${companyPrefix}(${type})-${docYear}-${newRunNumber}`;
 
     await Log.create({
