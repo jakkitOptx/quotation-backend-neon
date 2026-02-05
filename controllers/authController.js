@@ -4,10 +4,13 @@ const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 const User = require("../models/User");
 const nodemailer = require("nodemailer");
+const connectDB = require("../config/db");
 
 // ลงทะเบียน (Register)
 exports.register = async (req, res) => {
   try {
+    await connectDB(); // ✅ เพิ่มเพื่อกัน buffering timed out / cold start
+
     let users = req.body;
     if (!Array.isArray(users)) {
       users = [users]; // ถ้าเป็น object เดียว ให้แปลงเป็น array
@@ -122,6 +125,8 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   const { username, password } = req.body;
   try {
+    await connectDB(); // ✅ เพิ่มบรรทัดนี้เท่านั้น
+
     const user = await User.findOne({ username });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -153,7 +158,7 @@ exports.login = async (req, res) => {
         teamRole: user.teamRole,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "12h" } // ✅ ปรับเป็น 12 ชั่วโมง
+      { expiresIn: "12h" }
     );
 
     res.status(200).json({
@@ -172,7 +177,7 @@ exports.login = async (req, res) => {
         teamGroup: user.teamGroup,
         teamRole: user.teamRole,
       },
-      expiresIn: 12 * 60 * 60, // ✅ 43200 วินาที
+      expiresIn: 12 * 60 * 60,
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
