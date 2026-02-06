@@ -11,8 +11,6 @@ const corsOptions = {
     "http://localhost:3000",
     "https://neonworksfi.com",
     "https://www.neonworksfi.com", // ✅ กันกรณี www
-    "https://optxfi.com",
-    "https://www.optxfi.com",
   ],
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS", // ✅ เพิ่ม OPTIONS
   credentials: true,
