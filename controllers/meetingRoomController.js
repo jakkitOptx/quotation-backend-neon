@@ -29,7 +29,9 @@ exports.getRooms = async (req, res) => {
     const rooms = await MeetingRoom.find({ isActive: true }).sort({ floor: 1 });
     res.json(rooms);
   } catch (err) {
-    res.status(500).json({ message: "Error fetching rooms", error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching rooms", error: err.message });
   }
 };
 
@@ -41,7 +43,9 @@ exports.getBookings = async (req, res) => {
     const { roomId, dateKey } = req.query;
 
     if (!roomId || !dateKey) {
-      return res.status(400).json({ message: "roomId and dateKey are required" });
+      return res
+        .status(400)
+        .json({ message: "roomId and dateKey are required" });
     }
 
     const bookings = await MeetingRoomBooking.find({ roomId, dateKey })
@@ -50,7 +54,9 @@ exports.getBookings = async (req, res) => {
 
     res.json(bookings);
   } catch (err) {
-    res.status(500).json({ message: "Error fetching bookings", error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching bookings", error: err.message });
   }
 };
 
@@ -68,10 +74,12 @@ exports.createBooking = async (req, res) => {
     const endMin = timeToMin(endTime);
 
     if (endMin <= startMin) {
-      return res.status(400).json({ message: "endTime must be greater than startTime" });
+      return res
+        .status(400)
+        .json({ message: "endTime must be greater than startTime" });
     }
 
-    // ✅ เช็คชน: startMin < newEnd AND endMin > newStart
+    // ✅ เช็คชน
     const conflict = await MeetingRoomBooking.findOne({
       roomId,
       dateKey,
@@ -86,8 +94,21 @@ exports.createBooking = async (req, res) => {
       });
     }
 
+    // =========================
+    // ✅ ส่วนที่เพิ่มเข้ามา
+    // =========================
     const createdByUser = req.user?.username || null;
     const createdByEmail = req.user?.email || null;
+
+    const createdByName =
+      req.user?.firstName && req.user?.lastName
+        ? `${req.user.firstName} ${req.user.lastName}`
+        : req.user?.username || req.user?.email || null;
+
+    const createdByApp =
+      (req.user?.company || "").toUpperCase() === "OPTX" ? "OPTX" : "NEON";
+
+    const createdByDepartment = req.user?.department || null;
 
     const booking = await MeetingRoomBooking.create({
       roomId,
@@ -97,13 +118,22 @@ exports.createBooking = async (req, res) => {
       startTime,
       endTime,
       purpose: purpose?.trim() || "-",
+
+      // ของเดิม
       createdByUser,
       createdByEmail,
+
+      // ✅ ของใหม่
+      createdByName,
+      createdByApp,
+      createdByDepartment,
     });
 
     res.status(201).json(booking);
   } catch (err) {
-    res.status(500).json({ message: "Error creating booking", error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error creating booking", error: err.message });
   }
 };
 
@@ -113,12 +143,30 @@ exports.updateBooking = async (req, res) => {
     const { roomId, dateKey, startTime, endTime, purpose } = req.body;
 
     const booking = await MeetingRoomBooking.findById(id);
-    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
 
-    // ✅ อนุญาตให้แก้เฉพาะคนสร้าง หรือ admin (ถ้าคุณมี role)
-    const isOwner =
-      (req.user?.username && booking.createdByUser === req.user.username) ||
-      (req.user?.email && booking.createdByEmail === req.user.email);
+    // =========================
+    // ✅ เช็คสิทธิ์ (แก้ตรงนี้)
+    // =========================
+    const sameUsername =
+      req.user?.username && booking.createdByUser === req.user.username;
+
+    const sameEmail =
+      req.user?.email && booking.createdByEmail === req.user.email;
+
+    const sameNameAndApp =
+      booking.createdByName &&
+      req.user &&
+      booking.createdByName ===
+        (req.user.firstName && req.user.lastName
+          ? `${req.user.firstName} ${req.user.lastName}`
+          : req.user.username || req.user.email) &&
+      booking.createdByApp ===
+        ((req.user.company || "").toUpperCase() === "OPTX" ? "OPTX" : "NEON");
+
+    const isOwner = sameUsername || sameEmail || sameNameAndApp;
 
     const isAdmin = req.user?.role === "admin" || req.user?.level === "admin";
 
@@ -126,6 +174,9 @@ exports.updateBooking = async (req, res) => {
       return res.status(403).json({ message: "Forbidden: not allowed" });
     }
 
+    // =========================
+    // ✅ Logic เดิม (ไม่ต้องแตะ)
+    // =========================
     const newRoomId = roomId || booking.roomId.toString();
     const newDateKey = dateKey || booking.dateKey;
     const newStartTime = startTime || booking.startTime;
@@ -135,10 +186,12 @@ exports.updateBooking = async (req, res) => {
     const newEndMin = timeToMin(newEndTime);
 
     if (newEndMin <= newStartMin) {
-      return res.status(400).json({ message: "endTime must be greater than startTime" });
+      return res
+        .status(400)
+        .json({ message: "endTime must be greater than startTime" });
     }
 
-    // ✅ เช็คชนกับรายการอื่น (ยกเว้นตัวเอง)
+    // เช็คชน (ยกเว้นตัวเอง)
     const conflict = await MeetingRoomBooking.findOne({
       _id: { $ne: id },
       roomId: newRoomId,
@@ -154,6 +207,9 @@ exports.updateBooking = async (req, res) => {
       });
     }
 
+    // =========================
+    // ✅ อัปเดตข้อมูล (ห้ามแตะ createdBy*)
+    // =========================
     booking.roomId = newRoomId;
     booking.dateKey = newDateKey;
     booking.startTime = newStartTime;
@@ -165,7 +221,10 @@ exports.updateBooking = async (req, res) => {
     await booking.save();
     res.json(booking);
   } catch (err) {
-    res.status(500).json({ message: "Error updating booking", error: err.message });
+    res.status(500).json({
+      message: "Error updating booking",
+      error: err.message,
+    });
   }
 };
 
@@ -176,9 +235,23 @@ exports.deleteBooking = async (req, res) => {
     const booking = await MeetingRoomBooking.findById(id);
     if (!booking) return res.status(404).json({ message: "Booking not found" });
 
-    const isOwner =
-      (req.user?.username && booking.createdByUser === req.user.username) ||
-      (req.user?.email && booking.createdByEmail === req.user.email);
+    const sameUsername =
+      req.user?.username && booking.createdByUser === req.user.username;
+
+    const sameEmail =
+      req.user?.email && booking.createdByEmail === req.user.email;
+
+    const sameNameAndApp =
+      booking.createdByName &&
+      req.user &&
+      booking.createdByName ===
+        (req.user.firstName && req.user.lastName
+          ? `${req.user.firstName} ${req.user.lastName}`
+          : req.user.username || req.user.email) &&
+      booking.createdByApp ===
+        ((req.user.company || "").toUpperCase() === "OPTX" ? "OPTX" : "NEON");
+
+    const isOwner = sameUsername || sameEmail || sameNameAndApp;
 
     const isAdmin = req.user?.role === "admin" || req.user?.level === "admin";
 
@@ -189,6 +262,8 @@ exports.deleteBooking = async (req, res) => {
     await MeetingRoomBooking.deleteOne({ _id: id });
     res.json({ message: "Booking deleted" });
   } catch (err) {
-    res.status(500).json({ message: "Error deleting booking", error: err.message });
+    res
+      .status(500)
+      .json({ message: "Error deleting booking", error: err.message });
   }
 };

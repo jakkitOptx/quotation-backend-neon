@@ -21,13 +21,27 @@ const MeetingRoomBookingSchema = new mongoose.Schema(
 
     purpose: { type: String, default: "-" },
 
+    // ✅ ของเดิม (ยังเก็บไว้)
     createdByUser: { type: String, default: null }, // username
     createdByEmail: { type: String, default: null }, // email
+
+    // ✅ เพิ่มเพื่อ “แสดงชื่อคนจอง” (snapshot)
+    createdByName: { type: String, default: null }, // เช่น "Aj Arm"
+    createdByApp: {
+      type: String,
+      enum: ["OPTX", "NEON"],
+      default: null, // เพื่อบอกว่ามาจากระบบไหน
+      index: true,
+    },
+    createdByDepartment: { type: String, default: null },
   },
   { timestamps: true }
 );
 
 // ช่วยเร่ง query ตามห้อง+วัน
 MeetingRoomBookingSchema.index({ roomId: 1, dateKey: 1 });
+
+// (แนะนำ) กันชนช่วงเวลาแบบเร็วขึ้นเวลาเช็ค conflict
+MeetingRoomBookingSchema.index({ roomId: 1, dateKey: 1, startMin: 1, endMin: 1 });
 
 module.exports = mongoose.model("MeetingRoomBooking", MeetingRoomBookingSchema);
