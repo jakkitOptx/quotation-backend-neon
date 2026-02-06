@@ -11,6 +11,8 @@ const corsOptions = {
     "http://localhost:3000",
     "https://neonworksfi.com",
     "https://www.neonworksfi.com", // ✅ กันกรณี www
+    "https://optxfi.com",
+    "https://www.optxfi.com",
   ],
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS", // ✅ เพิ่ม OPTIONS
   credentials: true,
@@ -52,7 +54,6 @@ const fixRoutes = require("./routes/fixRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const meetingRoomRoutes = require("./routes/meetingRoomRoutes");
 
-
 app.use("/api/quotations", quotationRoutes);
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/auth", authRoutes);
@@ -69,7 +70,6 @@ app.use("/api/cron", cronRoutes);
 app.use("/api/fix", fixRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/meeting-rooms", meetingRoomRoutes);
-
 
 app.get("/", (req, res) => {
   res.status(200).json({ message: "NEON FINANCE API is running!" });
