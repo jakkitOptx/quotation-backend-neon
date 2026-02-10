@@ -228,6 +228,42 @@ exports.updateBooking = async (req, res) => {
   }
 };
 
+exports.getMyBookings = async (req, res) => {
+  try {
+    const { roomId, dateKey } = req.query;
+
+    if (!roomId || !dateKey) {
+      return res
+        .status(400)
+        .json({ message: "roomId and dateKey are required" });
+    }
+
+    // ✅ filter เฉพาะของตัวเอง (ใช้ username/email ที่เชื่อถือได้ที่สุด)
+    const or = [];
+    if (req.user?.username) or.push({ createdByUser: req.user.username });
+    if (req.user?.email) or.push({ createdByEmail: req.user.email });
+
+    if (or.length === 0) {
+      return res.status(401).json({ message: "User identity missing" });
+    }
+
+    const bookings = await MeetingRoomBooking.find({
+      roomId,
+      dateKey,
+      $or: or,
+    })
+      .sort({ startMin: 1 })
+      .lean();
+
+    res.json(bookings);
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error fetching my bookings", error: err.message });
+  }
+};
+
+
 exports.deleteBooking = async (req, res) => {
   try {
     const { id } = req.params;
