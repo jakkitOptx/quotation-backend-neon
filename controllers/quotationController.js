@@ -716,15 +716,25 @@ exports.duplicateQuotation = async (req, res) => {
 // สรุปยอด total / pending / approved ใน query เดียว
 exports.getQuotationsSummary = async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { year } = req.query;
 
-    // เงื่อนไขกรองเสริม (ถ้าไม่ส่งมาจะไม่นำมาใช้)
-    const match = {};
-    if (startDate || endDate) {
-      match.documentDate = {};
-      if (startDate) match.documentDate.$gte = new Date(startDate);
-      if (endDate) match.documentDate.$lte = new Date(endDate);
+    // ถ้าไม่ส่ง year มา ใช้ปีปัจจุบัน
+    const now = new Date();
+    const selectedYear = Number.isInteger(parseInt(year, 10))
+      ? parseInt(year, 10)
+      : now.getFullYear();
+
+    if (selectedYear < 2000 || selectedYear > 3000) {
+      return res.status(400).json({ message: "Invalid year" });
     }
+
+    // ช่วงปี (ใช้แบบ range จะเร็วและใช้ index ได้)
+    const yearStart = new Date(selectedYear, 0, 1, 0, 0, 0, 0);
+    const yearEnd = new Date(selectedYear + 1, 0, 1, 0, 0, 0, 0);
+
+    const match = {
+      documentDate: { $gte: yearStart, $lt: yearEnd },
+    };
 
     const [summary] = await Quotation.aggregate([
       { $match: match },
