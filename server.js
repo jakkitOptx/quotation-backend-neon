@@ -2,7 +2,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const morgan = require("morgan");
-const connectDB = require("./config/db"); // ✅ ใช้ db.js ที่คุณเพิ่มแล้ว
+const connectDB = require("./config/db");
 
 dotenv.config();
 
@@ -10,9 +10,9 @@ const corsOptions = {
   origin: [
     "http://localhost:3000",
     "https://neonworksfi.com",
-    "https://www.neonworksfi.com", // ✅ กันกรณี www
+    "https://www.neonworksfi.com",
   ],
-  methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS", // ✅ เพิ่ม OPTIONS
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
   credentials: true,
   allowedHeaders: "Origin,X-Requested-With,Content-Type,Accept,Authorization",
 };
@@ -22,16 +22,30 @@ app.use(express.json());
 
 // ✅ CORS + Preflight
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // ✅ สำคัญมากสำหรับ OPTIONS
+app.options("*", cors(corsOptions));
 
 app.use(morgan("dev"));
 
-// ✅ MongoDB: connect แบบไม่ kill process (สำคัญบน Vercel/Serverless)
+/**
+ * ✅ สำคัญที่สุด: Ensure DB connected ก่อนเข้า routes ทุกตัว
+ * - กัน cold start / race condition บน Vercel
+ * - connectDB มี cache อยู่แล้ว → request ต่อๆไปจะเร็วมาก
+ */
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    console.error("❌ DB connect error:", err?.message || err);
+    return res.status(500).json({ message: "Database connection failed" });
+  }
+});
+
+// (Optional) จะคงไว้ก็ได้เพื่อ warm-up ตอนเริ่ม function
 connectDB()
-  .then(() => console.log("✅ MongoDB Connected"))
+  .then(() => console.log("✅ MongoDB Connected (warm-up)"))
   .catch((err) => {
-    console.error("❌ MongoDB Error:", err.message);
-    // ❌ ห้าม process.exit(1)
+    console.error("❌ MongoDB Warm-up Error:", err.message);
   });
 
 // ✅ Routes
@@ -75,7 +89,7 @@ app.get("/", (req, res) => {
 
 // ✅ Error Handler
 app.use((err, req, res, next) => {
-  console.error("Global Error:", err.stack);
+  console.error("Global Error:", err.stack || err);
   res
     .status(err.status || 500)
     .json({ message: err.message || "Internal Server Error" });
@@ -86,8 +100,7 @@ app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// ✅ Local dev: listen ปกติ
-// ✅ Vercel: export app (ห้าม listen)
+// ✅ Local dev: listen ปกติ / Vercel: export app
 if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {

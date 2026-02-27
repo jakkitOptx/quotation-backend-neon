@@ -227,8 +227,9 @@ exports.getQuotations = async (req, res) => {
 // ✅ ดึง Quotation ตาม email พร้อมแบ่งหน้า และรองรับ query ปี + รองรับ department
 exports.getQuotationsByEmailPaginated = async (req, res) => {
   const { email } = req.params;
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 20;
+
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 20;
   const skip = (page - 1) * limit;
   const { year } = req.query;
 
@@ -237,22 +238,30 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    const user = await User.findOne({ username: email });
+    // ✅ ใช้ user จาก token (authMiddleware set ให้แล้ว)
+    const user = req.user;
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+    // ✅ กันยิงดูของคนอื่น (ยกเว้น admin)
+    // email param ควรตรงกับคนที่ login อยู่
+    if (user.role !== "admin" && user.username !== email) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
 
     const query = {
       documentDate: { $gte: start, $lt: end },
     };
-    console.log(
-      "user.teamGroup getQuotationsByEmailPaginated ==>",
-      user.teamGroup
-    );
+
+    // ✅ Debug ได้ตามต้องการ
+    console.log("user.teamGroup getQuotationsByEmailPaginated ==>", user.teamGroup);
+
+    // ✅ Admin เห็นทั้งหมดของปีนั้น
     if (user.role !== "admin") {
       if (user.level >= 3) {
         query.department = user.department;
@@ -287,7 +296,7 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
       netAmount: roundUp(qt.netAmount),
     }));
 
-    res.status(200).json({
+    return res.status(200).json({
       data: roundedQuotations,
       totalPages: Math.ceil(total / limit),
       currentPage: page,
@@ -295,10 +304,9 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching paginated quotations by email:", error);
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 };
-
 // ✅ ดึง Quotation ตาม Email ของ User และกรองตามปี (default ปีปัจจุบัน) + รองรับ role filter
 exports.getQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
@@ -309,25 +317,33 @@ exports.getQuotationsByEmail = async (req, res) => {
       return res.status(400).json({ message: "Email is required" });
     }
 
-    const user = await User.findOne({ username: email });
+    // ✅ ใช้ user จาก token
+    const user = req.user;
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
+    // ✅ กัน user ยิงดูของคนอื่น (ยกเว้น admin)
+    if (user.role !== "admin" && user.username !== email) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
     const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
     const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
 
     const query = {
       documentDate: { $gte: start, $lt: end },
     };
+
+    // ✅ role filter ตาม user ที่ login จริง
     if (user.role !== "admin") {
       if (user.level >= 3) {
         query.department = user.department;
       } else if (user.level === 2) {
         query.teamGroup = user.teamGroup;
       } else {
-        query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
+        query.createdByUser = user.username;
       }
     }
 
@@ -351,10 +367,10 @@ exports.getQuotationsByEmail = async (req, res) => {
       netAmount: roundUp(qt.netAmount),
     }));
 
-    res.status(200).json(roundedQuotations);
+    return res.status(200).json(roundedQuotations);
   } catch (error) {
     console.error("Error fetching quotations by email:", error);
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 };
 

@@ -29,7 +29,7 @@ router.get("/paginated", quotationController.getQuotationsWithPagination);
 router.patch(
   "/fix-departments",
   authMiddleware, // ตรวจ token
-  quotationController.fixMissingDepartments
+  quotationController.fixMissingDepartments,
 );
 
 // ✅ อัปเดตใบเสนอราคา (Neon Version) — แก้ runNumber ให้รองรับเปลี่ยนปี/เปลี่ยน type และหาเลขว่าง
@@ -189,7 +189,7 @@ router.patch("/:id", authMiddleware, async (req, res) => {
         numberOfSpecialPages,
         approvalStatus,
       },
-      { new: true }
+      { new: true },
     );
 
     if (!updatedQuotation) {
@@ -235,13 +235,10 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 
     // ✅ จัดรูปแบบรหัสใบเสนอราคา (Prefix ตาม Email Domain)
     const docYear = new Date(deletedQuotation.documentDate).getFullYear();
-    const runFormatted =
-      deletedQuotation.runNumber?.padStart(3, "0") || "???";
+    const runFormatted = deletedQuotation.runNumber?.padStart(3, "0") || "???";
 
     // ✅ Neon ใช้ prefix “NW-QT” ส่วน OPTX ใช้ “OPTX”
-    const companyPrefix = performedBy.includes("@optx")
-      ? "OPTX"
-      : "NW-QT";
+    const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
 
     const qtNumber = `${companyPrefix}(${deletedQuotation.type})-${docYear}-${runFormatted}`;
 
@@ -259,7 +256,6 @@ router.delete("/:id", authMiddleware, async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
 
 // ค้นหาใบเสนอราคา
 router.get("/search", async (req, res) => {
@@ -285,16 +281,20 @@ router.get("/search", async (req, res) => {
 // ดึง qt by email สำหรับแสดงหน้าจอเร็ว ๆ (แค่ 10–20 รายการแรก)
 router.get(
   "/by-email/:email/paginated",
-  quotationController.getQuotationsByEmailPaginated
+  authMiddleware, // ✅ ต้องใส่ตัวนี้
+  quotationController.getQuotationsByEmailPaginated,
 );
-
 // ดึง qt by email
-router.get("/by-email/:email", quotationController.getQuotationsByEmail);
+router.get(
+  "/by-email/:email",
+  authMiddleware,
+  quotationController.getQuotationsByEmail,
+);
 
 // 🔹 เพิ่ม API ดึงใบ Quotation ที่ต้อง Approve ตาม Email
 router.get(
   "/approval-by-email/:email",
-  quotationController.getApprovalQuotationsByEmail
+  quotationController.getApprovalQuotationsByEmail,
 );
 // เปลี่ยนสถานะอนุมัติ (Approve/Reject)
 router.patch("/:id/approve", async (req, res) => {
@@ -376,16 +376,23 @@ router.patch("/:id/reason", async (req, res) => {
 router.patch("/:id/reset", authMiddleware, quotationController.resetQuotation);
 
 // ✅ Duplicate Quotation
-router.post("/:id/duplicate", authMiddleware, quotationController.duplicateQuotation);
+router.post(
+  "/:id/duplicate",
+  authMiddleware,
+  quotationController.duplicateQuotation,
+);
 
 // ✅ อัปเดต Flow ของใบเสนอราคาเดิมให้เป็น Flow ปัจจุบัน
-router.patch("/:id/update-approval-flow", quotationController.updateApprovalFlow);
+router.patch(
+  "/:id/update-approval-flow",
+  quotationController.updateApprovalFlow,
+);
 // ✅ ดึงใบเสนอราคาเดี่ยว พร้อม field department
 router.get("/:id", async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages",
       )
 
       .populate({
@@ -398,7 +405,7 @@ router.get("/:id", async (req, res) => {
       })
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
+        "customerName address taxIdentificationNumber contactPhoneNumber",
       ); // ✅ เพิ่มการ populate clientId
 
     if (!quotation) {
