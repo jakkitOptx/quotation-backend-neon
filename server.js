@@ -65,6 +65,7 @@ const cronRoutes = require("./routes/cronRoutes");
 const fixRoutes = require("./routes/fixRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const meetingRoomRoutes = require("./routes/meetingRoomRoutes");
+const travelExpenseRoutes = require("./routes/travelExpenseRoutes");
 
 app.use("/api/quotations", quotationRoutes);
 app.use("/api/approvals", approvalRoutes);
@@ -82,6 +83,7 @@ app.use("/api/cron", cronRoutes);
 app.use("/api/fix", fixRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/meeting-rooms", meetingRoomRoutes);
+app.use("/api/travel-expenses", travelExpenseRoutes);
 
 app.get("/", (req, res) => {
   res.status(200).json({ message: "NEON FINANCE API is running!" });
