@@ -9,8 +9,8 @@ const TravelExpenseSchema = new mongoose.Schema(
 
     transportationType: {
       type: String,
-      enum: ["Taxi", "BTS", "MRT", "Bus", "Grab", "Personal Car", "Other"],
-      default: "Taxi",
+      enum: ["Taxi", "BTS", "MRT", "Bus", "Grab", "Personal Car", "Other" , "Car"],
+      default: "Car",
     },
 
     distanceKm: { type: Number, default: 0 },
