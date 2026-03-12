@@ -1,4 +1,3 @@
-// model/TravelExpense.js
 const mongoose = require("mongoose");
 
 const TravelExpenseSchema = new mongoose.Schema(
@@ -9,7 +8,7 @@ const TravelExpenseSchema = new mongoose.Schema(
 
     transportationType: {
       type: String,
-      enum: ["Taxi", "BTS", "MRT", "Bus", "Grab", "Personal Car", "Other" , "Car"],
+      enum: ["Taxi", "BTS", "MRT", "Bus", "Grab", "Personal Car", "Other", "Car"],
       default: "Car",
     },
 
@@ -24,6 +23,7 @@ const TravelExpenseSchema = new mongoose.Schema(
     teamGroup: { type: String, default: "" },
 
     receiptUrl: { type: String, default: "" },
+    tollReceiptUrls: { type: [String], default: [] },
 
     status: {
       type: String,
@@ -38,4 +38,6 @@ const TravelExpenseSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("TravelExpense", TravelExpenseSchema);
+module.exports =
+  mongoose.models.TravelExpense ||
+  mongoose.model("TravelExpense", TravelExpenseSchema);
