@@ -23,6 +23,7 @@ const TravelExpenseSchema = new mongoose.Schema(
     teamGroup: { type: String, default: "" },
 
     receiptUrl: { type: String, default: "" },
+    tollReceiptUrls: { type: [String], default: [] },
 
     status: {
       type: String,

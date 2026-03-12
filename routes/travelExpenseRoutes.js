@@ -1,9 +1,23 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
 const authMiddleware = require("../middlewares/authMiddleware");
 const travelExpenseController = require("../controllers/travelExpenseController");
 
-router.post("/", authMiddleware, travelExpenseController.createTravelExpense);
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+router.post(
+  "/estimate",
+  authMiddleware,
+  travelExpenseController.estimateTravelExpense
+);
+router.post(
+  "/",
+  authMiddleware,
+  upload.array("tollReceipts", 10),
+  travelExpenseController.createTravelExpense
+);
 router.get("/", authMiddleware, travelExpenseController.getTravelExpenses);
 router.get(
   "/approvals",

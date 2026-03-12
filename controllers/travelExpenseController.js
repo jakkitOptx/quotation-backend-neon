@@ -1,13 +1,12 @@
 const TravelExpense = require("../models/TravelExpense");
 const { getDrivingDistance } = require("../services/googleRoutesService");
+const { v2: cloudinary } = require("../utils/cloudinary");
+const streamifier = require("streamifier");
 
 const canApproveTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
 
-  // admin อนุมัติได้ทุกใบ รวมถึงใบที่ตัวเองสร้าง
   if (user.role === "admin") return true;
-
-  // non-admin ห้ามอนุมัติรายการของตัวเอง
   if (user.username === doc.requestedBy) return false;
 
   if (Number(user.level) >= 3) {
@@ -19,6 +18,92 @@ const canApproveTravelExpense = (user, doc) => {
   }
 
   return false;
+};
+
+const calculateTravelEstimate = async (origin, destination) => {
+  const cleanOrigin = origin.trim();
+  const cleanDestination = destination.trim();
+
+  let distanceKm = 0;
+  let distanceMeters = 0;
+  let routeDuration = null;
+
+  try {
+    const routeResult = await getDrivingDistance(cleanOrigin, cleanDestination);
+    distanceKm = Number(routeResult?.distanceKm || 0);
+    distanceMeters = Number(routeResult?.distanceMeters || 0);
+    routeDuration = routeResult?.duration || null;
+  } catch (routeError) {
+    console.error("Route calculation failed:", routeError.message);
+  }
+
+  const ratePerKm = Number(process.env.TRAVEL_RATE_PER_KM || 0);
+  const amount = Number((distanceKm * ratePerKm).toFixed(2));
+
+  return {
+    cleanOrigin,
+    cleanDestination,
+    distanceKm,
+    distanceMeters,
+    routeDuration,
+    ratePerKm,
+    amount,
+  };
+};
+
+const uploadBufferToCloudinary = (file) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "travel-expenses/toll-receipts",
+        resource_type: "auto",
+      },
+      (error, result) => {
+        if (result) {
+          resolve(result);
+          return;
+        }
+
+        reject(error);
+      }
+    );
+
+    streamifier.createReadStream(file.buffer).pipe(stream);
+  });
+
+exports.estimateTravelExpense = async (req, res) => {
+  try {
+    const { origin, destination } = req.body;
+
+    if (!origin?.trim()) {
+      return res.status(400).json({ message: "Origin is required" });
+    }
+
+    if (!destination?.trim()) {
+      return res.status(400).json({ message: "Destination is required" });
+    }
+
+    const estimate = await calculateTravelEstimate(origin, destination);
+
+    return res.status(200).json({
+      message: "Travel estimate calculated successfully",
+      data: {
+        origin: estimate.cleanOrigin,
+        destination: estimate.cleanDestination,
+        distanceKm: estimate.distanceKm,
+        estimatedAmount: estimate.amount,
+      },
+      routeMeta: {
+        distanceMeters: estimate.distanceMeters,
+        distanceKm: estimate.distanceKm,
+        duration: estimate.routeDuration,
+        ratePerKm: estimate.ratePerKm,
+      },
+    });
+  } catch (error) {
+    console.error("estimateTravelExpense error:", error);
+    return res.status(500).json({ message: error.message });
+  }
 };
 
 exports.createTravelExpense = async (req, res) => {
@@ -44,57 +129,36 @@ exports.createTravelExpense = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const cleanOrigin = origin.trim();
-    const cleanDestination = destination.trim();
-
-    let distanceKm = 0;
-    let distanceMeters = 0;
-    let routeDuration = null;
-
-    try {
-      const routeResult = await getDrivingDistance(
-        cleanOrigin,
-        cleanDestination
-      );
-
-      distanceKm = Number(routeResult?.distanceKm || 0);
-      distanceMeters = Number(routeResult?.distanceMeters || 0);
-      routeDuration = routeResult?.duration || null;
-    } catch (routeError) {
-      console.error("Route calculation failed:", routeError.message);
-
-      // ระหว่างยังไม่เปิด billing ให้ fallback เป็น 0 ไปก่อน
-      // หรือถ้านายอยาก mock ชั่วคราว ค่อยเปลี่ยนตรงนี้ได้
-      distanceKm = 0;
-      distanceMeters = 0;
-      routeDuration = null;
-    }
-
-    const ratePerKm = Number(process.env.TRAVEL_RATE_PER_KM || 0);
-    const amount = Number((distanceKm * ratePerKm).toFixed(2));
+    const estimate = await calculateTravelEstimate(origin, destination);
+    const uploadedReceipts = await Promise.all(
+      (req.files || []).map(uploadBufferToCloudinary)
+    );
+    const tollReceiptUrls = uploadedReceipts.map((file) => file.secure_url);
 
     const doc = await TravelExpense.create({
-      origin: cleanOrigin,
-      destination: cleanDestination,
+      origin: estimate.cleanOrigin,
+      destination: estimate.cleanDestination,
       departureDateTime,
       transportationType: "Car",
-      distanceKm,
-      amount,
+      distanceKm: estimate.distanceKm,
+      amount: estimate.amount,
       note: note?.trim() || "",
       requestedBy: user.username,
       department: user.department || "",
       team: user.team || "",
       teamGroup: user.teamGroup || "",
+      receiptUrl: tollReceiptUrls[0] || "",
+      tollReceiptUrls,
     });
 
     return res.status(201).json({
       message: "Travel expense created successfully",
       data: doc,
       routeMeta: {
-        distanceMeters,
-        distanceKm,
-        duration: routeDuration,
-        ratePerKm,
+        distanceMeters: estimate.distanceMeters,
+        distanceKm: estimate.distanceKm,
+        duration: estimate.routeDuration,
+        ratePerKm: estimate.ratePerKm,
       },
     });
   } catch (error) {
@@ -259,7 +323,6 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     }
 
     if (user.role === "admin") {
-      // admin เห็นทุกใบ รวมของตัวเองด้วย
     } else {
       query.requestedBy = { $ne: user.username };
 
