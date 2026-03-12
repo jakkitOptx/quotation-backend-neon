@@ -1,4 +1,5 @@
 const TravelExpense = require("../models/TravelExpense");
+const { getDrivingDistance } = require("../services/googleRoutesService");
 
 const canApproveTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
@@ -43,12 +44,42 @@ exports.createTravelExpense = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    const cleanOrigin = origin.trim();
+    const cleanDestination = destination.trim();
+
+    let distanceKm = 0;
+    let distanceMeters = 0;
+    let routeDuration = null;
+
+    try {
+      const routeResult = await getDrivingDistance(
+        cleanOrigin,
+        cleanDestination
+      );
+
+      distanceKm = Number(routeResult?.distanceKm || 0);
+      distanceMeters = Number(routeResult?.distanceMeters || 0);
+      routeDuration = routeResult?.duration || null;
+    } catch (routeError) {
+      console.error("Route calculation failed:", routeError.message);
+
+      // ระหว่างยังไม่เปิด billing ให้ fallback เป็น 0 ไปก่อน
+      // หรือถ้านายอยาก mock ชั่วคราว ค่อยเปลี่ยนตรงนี้ได้
+      distanceKm = 0;
+      distanceMeters = 0;
+      routeDuration = null;
+    }
+
+    const ratePerKm = Number(process.env.TRAVEL_RATE_PER_KM || 0);
+    const amount = Number((distanceKm * ratePerKm).toFixed(2));
+
     const doc = await TravelExpense.create({
-      origin: origin.trim(),
-      destination: destination.trim(),
+      origin: cleanOrigin,
+      destination: cleanDestination,
       departureDateTime,
       transportationType: "Car",
-      amount: 0,
+      distanceKm,
+      amount,
       note: note?.trim() || "",
       requestedBy: user.username,
       department: user.department || "",
@@ -56,7 +87,16 @@ exports.createTravelExpense = async (req, res) => {
       teamGroup: user.teamGroup || "",
     });
 
-    return res.status(201).json(doc);
+    return res.status(201).json({
+      message: "Travel expense created successfully",
+      data: doc,
+      routeMeta: {
+        distanceMeters,
+        distanceKm,
+        duration: routeDuration,
+        ratePerKm,
+      },
+    });
   } catch (error) {
     console.error("createTravelExpense error:", error);
     return res.status(500).json({ message: error.message });
