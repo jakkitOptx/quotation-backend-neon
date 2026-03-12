@@ -1,16 +1,28 @@
-// controllers/travelExpenseController.js
 const TravelExpense = require("../models/TravelExpense");
+
+const canApproveTravelExpense = (user, doc) => {
+  if (!user || !doc) return false;
+
+  // admin อนุมัติได้ทุกใบ รวมถึงใบที่ตัวเองสร้าง
+  if (user.role === "admin") return true;
+
+  // non-admin ห้ามอนุมัติรายการของตัวเอง
+  if (user.username === doc.requestedBy) return false;
+
+  if (Number(user.level) >= 3) {
+    return !!user.department && user.department === doc.department;
+  }
+
+  if (Number(user.level) === 2) {
+    return !!user.teamGroup && user.teamGroup === doc.teamGroup;
+  }
+
+  return false;
+};
 
 exports.createTravelExpense = async (req, res) => {
   try {
-    const {
-      origin,
-      destination,
-      departureDateTime,
-      transportationType,
-      amount,
-      note = "",
-    } = req.body;
+    const { origin, destination, departureDateTime, note = "" } = req.body;
 
     if (!origin?.trim()) {
       return res.status(400).json({ message: "Origin is required" });
@@ -35,8 +47,8 @@ exports.createTravelExpense = async (req, res) => {
       origin: origin.trim(),
       destination: destination.trim(),
       departureDateTime,
-      transportationType,
-      amount: Number(amount || 0),
+      transportationType: "Car",
+      amount: 0,
       note: note?.trim() || "",
       requestedBy: user.username,
       department: user.department || "",
@@ -101,6 +113,7 @@ exports.getTravelExpenses = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
 exports.approveTravelExpense = async (req, res) => {
   try {
     const { id } = req.params;
@@ -109,6 +122,18 @@ exports.approveTravelExpense = async (req, res) => {
     const doc = await TravelExpense.findById(id);
     if (!doc) {
       return res.status(404).json({ message: "Travel expense not found" });
+    }
+
+    if (!canApproveTravelExpense(user, doc)) {
+      return res.status(403).json({
+        message: "You do not have permission to approve this item",
+      });
+    }
+
+    if (doc.status !== "Pending") {
+      return res.status(400).json({
+        message: "This item is not pending anymore",
+      });
     }
 
     doc.status = "Approved";
@@ -137,6 +162,18 @@ exports.rejectTravelExpense = async (req, res) => {
     const doc = await TravelExpense.findById(id);
     if (!doc) {
       return res.status(404).json({ message: "Travel expense not found" });
+    }
+
+    if (!canApproveTravelExpense(user, doc)) {
+      return res.status(403).json({
+        message: "You do not have permission to reject this item",
+      });
+    }
+
+    if (doc.status !== "Pending") {
+      return res.status(400).json({
+        message: "This item is not pending anymore",
+      });
     }
 
     doc.status = "Rejected";
@@ -181,11 +218,14 @@ exports.getTravelExpenseApprovals = async (req, res) => {
       ];
     }
 
-    // ปรับ logic permission ตามระบบคุณได้
-    if (user.role !== "admin") {
-      if (user.level >= 3) {
+    if (user.role === "admin") {
+      // admin เห็นทุกใบ รวมของตัวเองด้วย
+    } else {
+      query.requestedBy = { $ne: user.username };
+
+      if (Number(user.level) >= 3) {
         query.department = user.department;
-      } else if (user.level === 2) {
+      } else if (Number(user.level) === 2) {
         query.teamGroup = user.teamGroup;
       } else {
         return res.status(403).json({ message: "No approval permission" });
