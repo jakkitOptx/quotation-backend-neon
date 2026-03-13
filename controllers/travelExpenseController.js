@@ -1,7 +1,6 @@
 const TravelExpense = require("../models/TravelExpense");
 const { getDrivingDistance } = require("../services/googleRoutesService");
-const { v2: cloudinary } = require("../utils/cloudinary");
-const streamifier = require("streamifier");
+const { uploadBufferToS3 } = require("../utils/s3Client");
 
 const canApproveTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
@@ -51,25 +50,25 @@ const calculateTravelEstimate = async (origin, destination) => {
   };
 };
 
-const uploadBufferToCloudinary = (file) =>
-  new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: "travel-expenses/toll-receipts",
-        resource_type: "auto",
-      },
-      (error, result) => {
-        if (result) {
-          resolve(result);
-          return;
-        }
+const uploadTollReceiptToS3 = async (file) => {
+  const bucket = process.env.AWS_BUCKET;
+  const folder =
+    process.env.AWS_TRAVEL_EXPENSE_FOLDER ||
+    process.env.AWS_RECEIPT_FOLDER ||
+    "receipts";
 
-        reject(error);
-      }
-    );
+  if (!bucket || !process.env.AWS_REGION) {
+    throw new Error("S3 configuration is incomplete");
+  }
 
-    streamifier.createReadStream(file.buffer).pipe(stream);
+  return uploadBufferToS3({
+    bucket,
+    folder,
+    fileName: file.originalname,
+    buffer: file.buffer,
+    contentType: file.mimetype,
   });
+};
 
 exports.estimateTravelExpense = async (req, res) => {
   try {
@@ -131,9 +130,9 @@ exports.createTravelExpense = async (req, res) => {
 
     const estimate = await calculateTravelEstimate(origin, destination);
     const uploadedReceipts = await Promise.all(
-      (req.files || []).map(uploadBufferToCloudinary)
+      (req.files || []).map(uploadTollReceiptToS3)
     );
-    const tollReceiptUrls = uploadedReceipts.map((file) => file.secure_url);
+    const tollReceiptUrls = uploadedReceipts.map((file) => file.url);
 
     const doc = await TravelExpense.create({
       origin: estimate.cleanOrigin,
