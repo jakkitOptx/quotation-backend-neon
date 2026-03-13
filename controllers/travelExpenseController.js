@@ -19,19 +19,29 @@ const canApproveTravelExpense = (user, doc) => {
   return false;
 };
 
-const calculateTravelEstimate = async (origin, destination) => {
+const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
   const cleanOrigin = origin.trim();
   const cleanDestination = destination.trim();
 
   let distanceKm = 0;
   let distanceMeters = 0;
   let routeDuration = null;
+  let routeDurationText = null;
+  let routeAvoidTolls = false;
+  let routeAvoidHighways = false;
 
   try {
-    const routeResult = await getDrivingDistance(cleanOrigin, cleanDestination);
+    const routeResult = await getDrivingDistance(
+      cleanOrigin,
+      cleanDestination,
+      routeOptions
+    );
     distanceKm = Number(routeResult?.distanceKm || 0);
     distanceMeters = Number(routeResult?.distanceMeters || 0);
     routeDuration = routeResult?.duration || null;
+    routeDurationText = routeResult?.durationText || null;
+    routeAvoidTolls = routeResult?.avoidTolls;
+    routeAvoidHighways = routeResult?.avoidHighways;
   } catch (routeError) {
     console.error("Route calculation failed:", routeError.message);
   }
@@ -45,6 +55,9 @@ const calculateTravelEstimate = async (origin, destination) => {
     distanceKm,
     distanceMeters,
     routeDuration,
+    routeDurationText,
+    routeAvoidTolls,
+    routeAvoidHighways,
     ratePerKm,
     amount,
   };
@@ -72,7 +85,14 @@ const uploadTollReceiptToS3 = async (file) => {
 
 exports.estimateTravelExpense = async (req, res) => {
   try {
-    const { origin, destination } = req.body;
+    const {
+      origin,
+      destination,
+      avoidTolls,
+      avoidHighways,
+      useExpressway,
+      useTolls,
+    } = req.body;
 
     if (!origin?.trim()) {
       return res.status(400).json({ message: "Origin is required" });
@@ -82,7 +102,12 @@ exports.estimateTravelExpense = async (req, res) => {
       return res.status(400).json({ message: "Destination is required" });
     }
 
-    const estimate = await calculateTravelEstimate(origin, destination);
+    const estimate = await calculateTravelEstimate(origin, destination, {
+      avoidTolls,
+      avoidHighways,
+      useExpressway,
+      useTolls,
+    });
 
     return res.status(200).json({
       message: "Travel estimate calculated successfully",
@@ -95,7 +120,10 @@ exports.estimateTravelExpense = async (req, res) => {
       routeMeta: {
         distanceMeters: estimate.distanceMeters,
         distanceKm: estimate.distanceKm,
-        duration: estimate.routeDuration,
+        duration: estimate.routeDurationText || estimate.routeDuration,
+        durationSeconds: estimate.routeDuration,
+        avoidTolls: estimate.routeAvoidTolls,
+        avoidHighways: estimate.routeAvoidHighways,
         ratePerKm: estimate.ratePerKm,
       },
     });
@@ -107,7 +135,16 @@ exports.estimateTravelExpense = async (req, res) => {
 
 exports.createTravelExpense = async (req, res) => {
   try {
-    const { origin, destination, departureDateTime, note = "" } = req.body;
+    const {
+      origin,
+      destination,
+      departureDateTime,
+      note = "",
+      avoidTolls,
+      avoidHighways,
+      useExpressway,
+      useTolls,
+    } = req.body;
 
     if (!origin?.trim()) {
       return res.status(400).json({ message: "Origin is required" });
@@ -128,7 +165,12 @@ exports.createTravelExpense = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const estimate = await calculateTravelEstimate(origin, destination);
+    const estimate = await calculateTravelEstimate(origin, destination, {
+      avoidTolls,
+      avoidHighways,
+      useExpressway,
+      useTolls,
+    });
     const uploadedReceipts = await Promise.all(
       (req.files || []).map(uploadTollReceiptToS3)
     );
@@ -156,7 +198,10 @@ exports.createTravelExpense = async (req, res) => {
       routeMeta: {
         distanceMeters: estimate.distanceMeters,
         distanceKm: estimate.distanceKm,
-        duration: estimate.routeDuration,
+        duration: estimate.routeDurationText || estimate.routeDuration,
+        durationSeconds: estimate.routeDuration,
+        avoidTolls: estimate.routeAvoidTolls,
+        avoidHighways: estimate.routeAvoidHighways,
         ratePerKm: estimate.ratePerKm,
       },
     });
