@@ -1,9 +1,7 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const multer = require('multer');
+const multer = require("multer");
 const authMiddleware = require("../middlewares/authMiddleware");
-const { v2: cloudinary } = require('../utils/cloudinary');
-const streamifier = require('streamifier');
 const {
   uploadBufferToS3,
   generateSignedS3Url,
@@ -17,6 +15,7 @@ const allowedMimeTypes = new Set([
 ]);
 
 const storage = multer.memoryStorage();
+
 const upload = multer({
   storage,
   limits: {
@@ -36,47 +35,18 @@ const upload = multer({
 const pickReceiptFiles = (req) => {
   const files = req.files || [];
   const matchedFiles = files.filter((file) =>
-    ["receipt", "receipts", "file", "files", "tollReceipt", "tollReceipts"].includes(
-      file.fieldname
-    )
+    [
+      "receipt",
+      "receipts",
+      "file",
+      "files",
+      "tollReceipt",
+      "tollReceipts",
+    ].includes(file.fieldname)
   );
 
   return (matchedFiles.length ? matchedFiles : files).slice(0, 5);
 };
-
-router.post('/signature', upload.single('signature'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ message: 'No file uploaded' });
-  }
-
-  try {
-    const streamUpload = () => {
-      return new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          {
-            folder: 'signatures',
-            allowed_formats: ['jpg', 'jpeg', 'png'],
-          },
-          (error, result) => {
-            if (result) {
-              resolve(result);
-            } else {
-              reject(error);
-            }
-          }
-        );
-
-        streamifier.createReadStream(req.file.buffer).pipe(stream);
-      });
-    };
-
-    const result = await streamUpload();
-    res.status(200).json({ message: 'Upload successful', url: result.secure_url });
-  } catch (err) {
-    console.error('Cloudinary Upload Error:', err);
-    res.status(500).json({ message: 'Upload failed', error: err.message });
-  }
-});
 
 router.post("/receipt", upload.any(), async (req, res) => {
   const files = pickReceiptFiles(req);
@@ -136,7 +106,11 @@ router.post("/receipt", upload.any(), async (req, res) => {
 const handleSignedReceiptUrl = async (req, res) => {
   try {
     const bucket = process.env.AWS_BUCKET;
-    const requestedKey = req.body?.key || req.query?.key || req.body?.url || req.query?.url;
+    const requestedKey =
+      req.body?.key ||
+      req.query?.key ||
+      req.body?.url ||
+      req.query?.url;
 
     if (!bucket || !process.env.AWS_REGION) {
       return res.status(500).json({
@@ -171,20 +145,5 @@ const handleSignedReceiptUrl = async (req, res) => {
 
 router.get("/receipt/signed-url", authMiddleware, handleSignedReceiptUrl);
 router.post("/receipt/signed-url", authMiddleware, handleSignedReceiptUrl);
-
-// POST /api/upload/delete
-router.post("/delete", async (req, res) => {
-  try {
-    const { public_id } = req.body; // 👈 ส่งมาใน body เช่น "signatures/ชื่อไฟล์"
-    const result = await cloudinary.uploader.destroy(public_id);
-    return res.status(200).json({
-      message: "Deleted successfully",
-      result,
-    });
-  } catch (error) {
-    console.error("Cloudinary Delete Error:", error);
-    return res.status(500).json({ message: "Failed to delete", error });
-  }
-});
 
 module.exports = router;
