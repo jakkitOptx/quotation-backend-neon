@@ -15,7 +15,7 @@ router.post(
 router.post(
   "/",
   authMiddleware,
-  upload.array("tollReceipts", 10),
+  upload.array("tollReceipts", 5),
   travelExpenseController.createTravelExpense
 );
 router.get("/", authMiddleware, travelExpenseController.getTravelExpenses);
