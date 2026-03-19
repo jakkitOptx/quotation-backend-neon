@@ -19,6 +19,15 @@ const canApproveTravelExpense = (user, doc) => {
   return false;
 };
 
+const parseMoneyValue = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return 0;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
   const cleanOrigin = origin.trim();
   const cleanDestination = destination.trim();
@@ -140,6 +149,7 @@ exports.createTravelExpense = async (req, res) => {
       destination,
       departureDateTime,
       note = "",
+      tollFee,
       avoidTolls,
       avoidHighways,
       useExpressway,
@@ -183,6 +193,7 @@ exports.createTravelExpense = async (req, res) => {
       transportationType: "Car",
       distanceKm: estimate.distanceKm,
       amount: estimate.amount,
+      tollFee: parseMoneyValue(tollFee),
       note: note?.trim() || "",
       requestedBy: user.username,
       department: user.department || "",
