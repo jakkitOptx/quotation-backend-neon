@@ -14,6 +14,7 @@ const TravelExpenseSchema = new mongoose.Schema(
 
     distanceKm: { type: Number, default: 0 },
     amount: { type: Number, default: 0 },
+    tollFee: { type: Number, default: 0 },
 
     note: { type: String, default: "", trim: true },
     requestedBy: { type: String, required: true, trim: true },
