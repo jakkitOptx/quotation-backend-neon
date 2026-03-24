@@ -34,6 +34,14 @@ const TravelExpenseSchema = new mongoose.Schema(
     note: { type: String, default: "", trim: true },
     requestedBy: { type: String, required: true, trim: true },
     requestedByLevel: { type: Number, required: true, default: 1 },
+    quotationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Quotation",
+      default: null,
+    },
+    quotationNumber: { type: String, default: "", trim: true },
+    quotationTitle: { type: String, default: "", trim: true },
+    projectName: { type: String, default: "", trim: true },
 
     department: { type: String, default: "" },
     team: { type: String, default: "" },

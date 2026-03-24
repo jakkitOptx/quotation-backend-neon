@@ -1,4 +1,5 @@
 const TravelExpense = require("../models/TravelExpense");
+const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 const { getDrivingDistance } = require("../services/googleRoutesService");
 const { uploadBufferToS3 } = require("../utils/s3Client");
@@ -97,6 +98,48 @@ const parseMoneyValue = (value) => {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseOptionalText = (value) => {
+  if (typeof value !== "string") return "";
+  return value.trim();
+};
+
+const resolveQuotationPayload = async ({
+  quotationId,
+  quotationNumber,
+  quotationTitle,
+  projectName,
+}) => {
+  const snapshot = {
+    quotationId: null,
+    quotationNumber: parseOptionalText(quotationNumber),
+    quotationTitle: parseOptionalText(quotationTitle),
+    projectName: parseOptionalText(projectName),
+  };
+
+  if (!quotationId) {
+    return snapshot;
+  }
+
+  const quotation = await Quotation.findById(quotationId)
+    .select("_id runNumber title projectName")
+    .lean();
+
+  if (!quotation) {
+    const error = new Error("Quotation not found");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    quotationId: quotation._id,
+    quotationNumber:
+      parseOptionalText(quotation.runNumber) || snapshot.quotationNumber,
+    quotationTitle: parseOptionalText(quotation.title) || snapshot.quotationTitle,
+    projectName:
+      parseOptionalText(quotation.projectName) || snapshot.projectName,
+  };
 };
 
 const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
@@ -221,6 +264,10 @@ exports.createTravelExpense = async (req, res) => {
       departureDateTime,
       note = "",
       tollFee,
+      quotationId,
+      quotationNumber,
+      quotationTitle,
+      projectName,
       avoidTolls,
       avoidHighways,
       useExpressway,
@@ -256,6 +303,12 @@ exports.createTravelExpense = async (req, res) => {
       (req.files || []).map(uploadTollReceiptToS3)
     );
     const tollReceiptUrls = uploadedReceipts.map((file) => file.url);
+    const quotationSnapshot = await resolveQuotationPayload({
+      quotationId,
+      quotationNumber,
+      quotationTitle,
+      projectName,
+    });
 
     const doc = await TravelExpense.create({
       origin: estimate.cleanOrigin,
@@ -268,6 +321,7 @@ exports.createTravelExpense = async (req, res) => {
       note: note?.trim() || "",
       requestedBy: user.username,
       requestedByLevel: Number(user.level) || 1,
+      ...quotationSnapshot,
       department: user.department || "",
       team: user.team || "",
       teamGroup: user.teamGroup || "",
@@ -292,7 +346,7 @@ exports.createTravelExpense = async (req, res) => {
     });
   } catch (error) {
     console.error("createTravelExpense error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 
