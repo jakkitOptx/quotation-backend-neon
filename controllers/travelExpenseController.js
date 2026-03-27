@@ -73,6 +73,10 @@ const ensureApprovalFlow = async (doc) => {
 };
 
 const isSameApprovalScope = (user, doc) => {
+  if (Number(user?.level) === 4) {
+    return true;
+  }
+
   return !!user?.department && user.department === doc.department;
 };
 
@@ -551,23 +555,28 @@ exports.getTravelExpenseApprovals = async (req, res) => {
         return res.status(403).json({ message: "No approval permission" });
       }
 
-      query.department = user.department;
+      if (Number(user.level) !== 4) {
+        query.department = user.department;
+      }
+
       query.status = "Pending";
     }
 
     const docs = await TravelExpense.find(query).sort({ createdAt: -1 });
     await Promise.all(docs.map((doc) => ensureApprovalFlow(doc)));
 
-    const data = docs.filter((doc) => {
-      if (user.role === "admin") return true;
-      const currentStep = syncCurrentApprovalLevel(doc);
+    const data =
+      user.role === "admin"
+        ? docs
+        : docs.filter((doc) => {
+            const currentStep = syncCurrentApprovalLevel(doc);
 
-      return (
-        !!currentStep &&
-        Number(currentStep.level) === Number(user.level) &&
-        isSameApprovalScope(user, doc)
-      );
-    });
+            return (
+              !!currentStep &&
+              Number(currentStep.level) === Number(user.level) &&
+              isSameApprovalScope(user, doc)
+            );
+          });
 
     return res.status(200).json({ data });
   } catch (error) {
