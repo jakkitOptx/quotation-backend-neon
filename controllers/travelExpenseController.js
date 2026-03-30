@@ -692,6 +692,7 @@ exports.getTravelExpenseApprovals = async (req, res) => {
   try {
     const { status = "Pending", year, search = "" } = req.query;
     const user = req.user;
+    const isPendingView = status === "Pending";
 
     const query = {};
 
@@ -724,7 +725,9 @@ exports.getTravelExpenseApprovals = async (req, res) => {
         query.department = user.department;
       }
 
-      query.status = "Pending";
+      if (isPendingView) {
+        query.status = "Pending";
+      }
     }
 
     const docs = await TravelExpense.find(query).sort({ createdAt: -1 });
@@ -733,15 +736,17 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     const data =
       user.role === "admin"
         ? docs
-        : docs.filter((doc) => {
-            const currentStep = syncCurrentApprovalLevel(doc);
+        : isPendingView
+          ? docs.filter((doc) => {
+              const currentStep = syncCurrentApprovalLevel(doc);
 
-            return (
-              !!currentStep &&
-              Number(currentStep.level) === Number(user.level) &&
-              isSameApprovalScope(user, doc)
-            );
-          });
+              return (
+                !!currentStep &&
+                Number(currentStep.level) === Number(user.level) &&
+                isSameApprovalScope(user, doc)
+              );
+            })
+          : docs;
 
     return res.status(200).json({ data });
   } catch (error) {
