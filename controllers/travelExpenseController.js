@@ -72,6 +72,15 @@ const ensureApprovalFlow = async (doc) => {
   return doc;
 };
 
+const resetTravelExpenseApprovalFlow = (doc) => {
+  doc.status = "Pending";
+  doc.approvedBy = "";
+  doc.approvedAt = null;
+  doc.rejectedReason = "";
+  doc.approvalSteps = createApprovalSteps(doc.requestedByLevel);
+  doc.currentApprovalLevel = buildApprovalLevels(doc.requestedByLevel)[0] || null;
+};
+
 const isSameApprovalScope = (user, doc) => {
   if (Number(user?.level) === 4) {
     return true;
@@ -144,6 +153,12 @@ const resolveQuotationPayload = async ({
     projectName:
       parseOptionalText(quotation.projectName) || snapshot.projectName,
   };
+};
+
+const canManageOwnPendingTravelExpense = (user, doc) => {
+  if (!user || !doc) return false;
+  if (user.username !== doc.requestedBy) return false;
+  return doc.status === "Pending";
 };
 
 const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
@@ -354,6 +369,156 @@ exports.createTravelExpense = async (req, res) => {
   }
 };
 
+exports.updateTravelExpense = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const doc = await TravelExpense.findById(id);
+
+    if (!doc) {
+      return res.status(404).json({ message: "Travel expense not found" });
+    }
+
+    if (!canManageOwnPendingTravelExpense(user, doc)) {
+      return res.status(403).json({
+        message: "You do not have permission to edit this item",
+      });
+    }
+
+    const {
+      origin,
+      destination,
+      departureDateTime,
+      note,
+      tollFee,
+      quotationId,
+      quotationNumber,
+      quotationTitle,
+      projectName,
+      avoidTolls,
+      avoidHighways,
+      useExpressway,
+      useTolls,
+    } = req.body;
+
+    const nextOrigin = origin?.trim() || doc.origin;
+    const nextDestination = destination?.trim() || doc.destination;
+    const nextDepartureDateTime = departureDateTime || doc.departureDateTime;
+
+    if (!nextOrigin) {
+      return res.status(400).json({ message: "Origin is required" });
+    }
+
+    if (!nextDestination) {
+      return res.status(400).json({ message: "Destination is required" });
+    }
+
+    if (!nextDepartureDateTime) {
+      return res
+        .status(400)
+        .json({ message: "Departure date time is required" });
+    }
+
+    const estimate = await calculateTravelEstimate(nextOrigin, nextDestination, {
+      avoidTolls,
+      avoidHighways,
+      useExpressway,
+      useTolls,
+    });
+
+    const hasQuotationPayload =
+      quotationId !== undefined ||
+      quotationNumber !== undefined ||
+      quotationTitle !== undefined ||
+      projectName !== undefined;
+
+    const quotationSnapshot = hasQuotationPayload
+      ? await resolveQuotationPayload({
+          quotationId,
+          quotationNumber,
+          quotationTitle,
+          projectName,
+        })
+      : {
+          quotationId: doc.quotationId || null,
+          quotationNumber: doc.quotationNumber || "",
+          quotationTitle: doc.quotationTitle || "",
+          projectName: doc.projectName || "",
+        };
+
+    const uploadedReceipts = await Promise.all(
+      (req.files || []).map(uploadTollReceiptToS3)
+    );
+    const tollReceiptUrls =
+      uploadedReceipts.length > 0
+        ? uploadedReceipts.map((file) => file.url)
+        : doc.tollReceiptUrls || [];
+
+    doc.origin = estimate.cleanOrigin;
+    doc.destination = estimate.cleanDestination;
+    doc.departureDateTime = nextDepartureDateTime;
+    doc.distanceKm = estimate.distanceKm;
+    doc.amount = estimate.amount;
+    doc.tollFee =
+      tollFee !== undefined ? parseMoneyValue(tollFee) : doc.tollFee;
+    doc.note = note !== undefined ? note?.trim() || "" : doc.note;
+    doc.quotationId = quotationSnapshot.quotationId;
+    doc.quotationNumber = quotationSnapshot.quotationNumber;
+    doc.quotationTitle = quotationSnapshot.quotationTitle;
+    doc.projectName = quotationSnapshot.projectName;
+    doc.receiptUrl = tollReceiptUrls[0] || "";
+    doc.tollReceiptUrls = tollReceiptUrls;
+
+    resetTravelExpenseApprovalFlow(doc);
+
+    await doc.save();
+
+    return res.status(200).json({
+      message: "Travel expense updated successfully",
+      data: doc,
+      routeMeta: {
+        distanceMeters: estimate.distanceMeters,
+        distanceKm: estimate.distanceKm,
+        duration: estimate.routeDurationText || estimate.routeDuration,
+        durationSeconds: estimate.routeDuration,
+        avoidTolls: estimate.routeAvoidTolls,
+        avoidHighways: estimate.routeAvoidHighways,
+        ratePerKm: estimate.ratePerKm,
+      },
+    });
+  } catch (error) {
+    console.error("updateTravelExpense error:", error);
+    return res.status(error.statusCode || 500).json({ message: error.message });
+  }
+};
+
+exports.deleteTravelExpense = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const doc = await TravelExpense.findById(id);
+
+    if (!doc) {
+      return res.status(404).json({ message: "Travel expense not found" });
+    }
+
+    if (!canManageOwnPendingTravelExpense(user, doc)) {
+      return res.status(403).json({
+        message: "You do not have permission to delete this item",
+      });
+    }
+
+    await TravelExpense.deleteOne({ _id: doc._id });
+
+    return res.status(200).json({
+      message: "Travel expense deleted successfully",
+    });
+  } catch (error) {
+    console.error("deleteTravelExpense error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
 exports.getTravelExpenses = async (req, res) => {
   try {
     const user = req.user;
@@ -527,6 +692,7 @@ exports.getTravelExpenseApprovals = async (req, res) => {
   try {
     const { status = "Pending", year, search = "" } = req.query;
     const user = req.user;
+    const isPendingView = status === "Pending";
 
     const query = {};
 
@@ -559,7 +725,9 @@ exports.getTravelExpenseApprovals = async (req, res) => {
         query.department = user.department;
       }
 
-      query.status = "Pending";
+      if (isPendingView) {
+        query.status = "Pending";
+      }
     }
 
     const docs = await TravelExpense.find(query).sort({ createdAt: -1 });
@@ -568,15 +736,17 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     const data =
       user.role === "admin"
         ? docs
-        : docs.filter((doc) => {
-            const currentStep = syncCurrentApprovalLevel(doc);
+        : isPendingView
+          ? docs.filter((doc) => {
+              const currentStep = syncCurrentApprovalLevel(doc);
 
-            return (
-              !!currentStep &&
-              Number(currentStep.level) === Number(user.level) &&
-              isSameApprovalScope(user, doc)
-            );
-          });
+              return (
+                !!currentStep &&
+                Number(currentStep.level) === Number(user.level) &&
+                isSameApprovalScope(user, doc)
+              );
+            })
+          : docs;
 
     return res.status(200).json({ data });
   } catch (error) {
