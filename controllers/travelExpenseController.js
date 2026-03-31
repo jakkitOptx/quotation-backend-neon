@@ -1,6 +1,7 @@
 const TravelExpense = require("../models/TravelExpense");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
+const Log = require("../models/Log");
 const { getDrivingDistance } = require("../services/googleRoutesService");
 const { uploadBufferToS3 } = require("../utils/s3Client");
 
@@ -28,9 +29,7 @@ const getCurrentApprovalStep = (doc) => {
     return null;
   }
 
-  return (
-    doc.approvalSteps.find((step) => step.status === "Pending") || null
-  );
+  return doc.approvalSteps.find((step) => step.status === "Pending") || null;
 };
 
 const syncCurrentApprovalLevel = (doc) => {
@@ -118,6 +117,61 @@ const parseOptionalText = (value) => {
   return value.trim();
 };
 
+const createTravelExpenseLog = async ({
+  travelExpenseId,
+  performedBy,
+  action,
+  description,
+}) => {
+  if (!travelExpenseId || !performedBy || !action) {
+    return;
+  }
+
+  await Log.create({
+    travelExpenseId,
+    resourceType: "travel-expense",
+    action,
+    performedBy,
+    description: description || "",
+  });
+};
+
+const buildUpdateChangeSummary = (doc, nextValues) => {
+  const changes = [];
+  const comparableFields = [
+    ["origin", doc.origin || "", nextValues.origin || ""],
+    ["destination", doc.destination || "", nextValues.destination || ""],
+    [
+      "departureDateTime",
+      doc.departureDateTime ? new Date(doc.departureDateTime).toISOString() : "",
+      nextValues.departureDateTime
+        ? new Date(nextValues.departureDateTime).toISOString()
+        : "",
+    ],
+    ["distanceKm", Number(doc.distanceKm || 0), Number(nextValues.distanceKm || 0)],
+    ["amount", Number(doc.amount || 0), Number(nextValues.amount || 0)],
+    ["tollFee", Number(doc.tollFee || 0), Number(nextValues.tollFee || 0)],
+    ["note", doc.note || "", nextValues.note || ""],
+    ["quotationId", String(doc.quotationId || ""), String(nextValues.quotationId || "")],
+    ["quotationNumber", doc.quotationNumber || "", nextValues.quotationNumber || ""],
+    ["quotationTitle", doc.quotationTitle || "", nextValues.quotationTitle || ""],
+    ["projectName", doc.projectName || "", nextValues.projectName || ""],
+    [
+      "tollReceiptUrls",
+      JSON.stringify(doc.tollReceiptUrls || []),
+      JSON.stringify(nextValues.tollReceiptUrls || []),
+    ],
+  ];
+
+  comparableFields.forEach(([field, currentValue, nextValue]) => {
+    if (currentValue !== nextValue) {
+      changes.push(field);
+    }
+  });
+
+  return changes;
+};
+
 const resolveQuotationPayload = async ({
   quotationId,
   quotationNumber,
@@ -165,6 +219,14 @@ const canDeleteTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
   if (user.role === "admin") return true;
   return canManageOwnPendingTravelExpense(user, doc);
+};
+
+const canViewTravelExpenseLog = (user, doc) => {
+  if (!user || !doc) return false;
+  if (user.role === "admin") return true;
+  if (user.username === doc.requestedBy) return true;
+  if (Number(user.level) < 3) return false;
+  return isSameApprovalScope(user, doc);
 };
 
 const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
@@ -460,6 +522,21 @@ exports.updateTravelExpense = async (req, res) => {
         ? uploadedReceipts.map((file) => file.url)
         : doc.tollReceiptUrls || [];
 
+    const changedFields = buildUpdateChangeSummary(doc, {
+      origin: estimate.cleanOrigin,
+      destination: estimate.cleanDestination,
+      departureDateTime: nextDepartureDateTime,
+      distanceKm: estimate.distanceKm,
+      amount: estimate.amount,
+      tollFee: tollFee !== undefined ? parseMoneyValue(tollFee) : doc.tollFee,
+      note: note !== undefined ? note?.trim() || "" : doc.note,
+      quotationId: quotationSnapshot.quotationId,
+      quotationNumber: quotationSnapshot.quotationNumber,
+      quotationTitle: quotationSnapshot.quotationTitle,
+      projectName: quotationSnapshot.projectName,
+      tollReceiptUrls,
+    });
+
     doc.origin = estimate.cleanOrigin;
     doc.destination = estimate.cleanDestination;
     doc.departureDateTime = nextDepartureDateTime;
@@ -478,6 +555,14 @@ exports.updateTravelExpense = async (req, res) => {
     resetTravelExpenseApprovalFlow(doc);
 
     await doc.save();
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: "edit",
+      description: `Travel expense updated. Changed fields: ${
+        changedFields.length > 0 ? changedFields.join(", ") : "none"
+      }`,
+    });
 
     return res.status(200).json({
       message: "Travel expense updated successfully",
@@ -514,6 +599,12 @@ exports.deleteTravelExpense = async (req, res) => {
       });
     }
 
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: "delete",
+      description: `Travel expense deleted. Route: ${doc.origin} -> ${doc.destination}`,
+    });
     await TravelExpense.deleteOne({ _id: doc._id });
 
     return res.status(200).json({
@@ -576,6 +667,116 @@ exports.getTravelExpenses = async (req, res) => {
   }
 };
 
+exports.getTravelExpenseLogs = async (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      action,
+      performedBy,
+      startDate,
+      endDate,
+      travelExpenseId,
+      page = 1,
+      limit = 50,
+    } = req.query;
+
+    if (!user || (user.role !== "admin" && Number(user.level) < 3)) {
+      return res.status(403).json({
+        message: "You do not have permission to view travel expense logs",
+      });
+    }
+
+    const filter = {
+      resourceType: "travel-expense",
+    };
+
+    if (travelExpenseId) {
+      filter.travelExpenseId = travelExpenseId;
+    }
+
+    if (action?.trim()) {
+      const actions = action
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      if (actions.length === 1) {
+        filter.action = actions[0];
+      } else if (actions.length > 1) {
+        filter.action = { $in: actions };
+      }
+    }
+
+    if (performedBy?.trim()) {
+      filter.performedBy = { $regex: performedBy.trim(), $options: "i" };
+    }
+
+    if (startDate || endDate) {
+      filter.timestamp = {};
+
+      if (startDate) {
+        filter.timestamp.$gte = new Date(startDate);
+      }
+
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.timestamp.$lte = end;
+      }
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const [data, total] = await Promise.all([
+      Log.find(filter)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(Number(limit)),
+      Log.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      data,
+      total,
+      currentPage: Number(page),
+      totalPages: Math.ceil(total / Number(limit)),
+    });
+  } catch (error) {
+    console.error("getTravelExpenseLogs error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getTravelExpenseLogsById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const doc = await TravelExpense.findById(id)
+      .select("requestedBy department")
+      .lean();
+
+    if (!doc) {
+      return res.status(404).json({ message: "Travel expense not found" });
+    }
+
+    if (!canViewTravelExpenseLog(user, doc)) {
+      return res.status(403).json({
+        message: "You do not have permission to view these logs",
+      });
+    }
+
+    const logs = await Log.find({
+      travelExpenseId: id,
+      resourceType: "travel-expense",
+    }).sort({ timestamp: -1 });
+
+    return res.status(200).json({ data: logs });
+  } catch (error) {
+    console.error("getTravelExpenseLogs error:", error);
+      return res.status(500).json({ message: error.message });
+  }
+};
+
 exports.approveTravelExpense = async (req, res) => {
   try {
     const { id } = req.params;
@@ -628,6 +829,14 @@ exports.approveTravelExpense = async (req, res) => {
     }
 
     await doc.save();
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: nextStep ? "approve" : "fully_approve",
+      description: nextStep
+        ? `Approved at level ${currentStep.level}`
+        : `Fully approved at level ${currentStep.level}`,
+    });
 
     return res.status(200).json({
       message: "Approved successfully",
@@ -683,6 +892,14 @@ exports.rejectTravelExpense = async (req, res) => {
     doc.currentApprovalLevel = null;
 
     await doc.save();
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: "reject",
+      description: rejectedReason
+        ? `Rejected at level ${currentStep.level}. Reason: ${rejectedReason}`
+        : `Rejected at level ${currentStep.level}`,
+    });
 
     return res.status(200).json({
       message: "Rejected successfully",
@@ -723,6 +940,7 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     if (user.role === "admin") {
     } else {
       query.requestedBy = { $ne: user.username };
+
       if (Number(user.level) < 3) {
         return res.status(403).json({ message: "No approval permission" });
       }
