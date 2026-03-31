@@ -161,6 +161,12 @@ const canManageOwnPendingTravelExpense = (user, doc) => {
   return doc.status === "Pending";
 };
 
+const canDeleteTravelExpense = (user, doc) => {
+  if (!user || !doc) return false;
+  if (user.role === "admin") return true;
+  return canManageOwnPendingTravelExpense(user, doc);
+};
+
 const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
   const cleanOrigin = origin.trim();
   const cleanDestination = destination.trim();
@@ -502,7 +508,7 @@ exports.deleteTravelExpense = async (req, res) => {
       return res.status(404).json({ message: "Travel expense not found" });
     }
 
-    if (!canManageOwnPendingTravelExpense(user, doc)) {
+    if (!canDeleteTravelExpense(user, doc)) {
       return res.status(403).json({
         message: "You do not have permission to delete this item",
       });
