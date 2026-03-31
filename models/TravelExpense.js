@@ -40,8 +40,12 @@ const TravelExpenseSchema = new mongoose.Schema(
       default: null,
     },
     quotationNumber: { type: String, default: "", trim: true },
+    quotationYear: { type: Number, default: null },
+    quotationType: { type: String, default: "", trim: true },
     quotationTitle: { type: String, default: "", trim: true },
     projectName: { type: String, default: "", trim: true },
+    documentRunNumber: { type: String, default: "", trim: true },
+    documentNo: { type: String, default: "", trim: true },
 
     department: { type: String, default: "" },
     team: { type: String, default: "" },
@@ -64,6 +68,9 @@ const TravelExpenseSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+TravelExpenseSchema.index({ quotationType: 1, documentRunNumber: 1 });
+TravelExpenseSchema.index({ documentNo: 1 });
 
 module.exports =
   mongoose.models.TravelExpense ||

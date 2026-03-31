@@ -19,6 +19,8 @@ router.post(
   travelExpenseController.createTravelExpense
 );
 router.get("/", authMiddleware, travelExpenseController.getTravelExpenses);
+router.get("/logs", authMiddleware, travelExpenseController.getTravelExpenseLogs);
+router.get("/:id/logs", authMiddleware, travelExpenseController.getTravelExpenseLogsById);
 router.get(
   "/approvals",
   authMiddleware,
@@ -30,8 +32,16 @@ router.patch(
   upload.array("tollReceipts", 5),
   travelExpenseController.updateTravelExpense
 );
-router.patch("/:id/approve", authMiddleware, travelExpenseController.approveTravelExpense);
-router.patch("/:id/reject", authMiddleware, travelExpenseController.rejectTravelExpense);
+router.patch(
+  "/:id/approve",
+  authMiddleware,
+  travelExpenseController.approveTravelExpense
+);
+router.patch(
+  "/:id/reject",
+  authMiddleware,
+  travelExpenseController.rejectTravelExpense
+);
 router.delete("/:id", authMiddleware, travelExpenseController.deleteTravelExpense);
 
 module.exports = router;
