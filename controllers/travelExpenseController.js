@@ -175,12 +175,18 @@ const buildUpdateChangeSummary = (doc, nextValues) => {
 const resolveQuotationPayload = async ({
   quotationId,
   quotationNumber,
+  quotationYear,
+  quotationType,
   quotationTitle,
   projectName,
 }) => {
   const snapshot = {
     quotationId: null,
     quotationNumber: parseOptionalText(quotationNumber),
+    quotationYear: Number.isFinite(Number(quotationYear))
+      ? Number(quotationYear)
+      : null,
+    quotationType: parseOptionalText(quotationType),
     quotationTitle: parseOptionalText(quotationTitle),
     projectName: parseOptionalText(projectName),
   };
@@ -190,7 +196,7 @@ const resolveQuotationPayload = async ({
   }
 
   const quotation = await Quotation.findById(quotationId)
-    .select("_id runNumber title projectName")
+    .select("_id runNumber type title projectName documentDate")
     .lean();
 
   if (!quotation) {
@@ -203,10 +209,79 @@ const resolveQuotationPayload = async ({
     quotationId: quotation._id,
     quotationNumber:
       parseOptionalText(quotation.runNumber) || snapshot.quotationNumber,
+    quotationYear: Number.isFinite(
+      Number(new Date(quotation.documentDate).getFullYear())
+    )
+      ? new Date(quotation.documentDate).getFullYear()
+      : snapshot.quotationYear,
+    quotationType: parseOptionalText(quotation.type) || snapshot.quotationType,
     quotationTitle: parseOptionalText(quotation.title) || snapshot.quotationTitle,
     projectName:
       parseOptionalText(quotation.projectName) || snapshot.projectName,
   };
+};
+
+const getNextTravelExpenseDocumentRunNumber = async (quotationType) => {
+  const normalizedType = parseOptionalText(quotationType);
+  if (!normalizedType) {
+    return "001";
+  }
+
+  const docs = await TravelExpense.find({
+    quotationType: normalizedType,
+    documentRunNumber: { $ne: "" },
+  })
+    .select("documentRunNumber")
+    .lean();
+
+  const maxRunNumber = docs.reduce((maxValue, item) => {
+    const currentValue = Number(item.documentRunNumber);
+    if (Number.isNaN(currentValue)) {
+      return maxValue;
+    }
+
+    return Math.max(maxValue, currentValue);
+  }, 0);
+
+  const nextValue = maxRunNumber + 1;
+  if (nextValue > 999) {
+    const error = new Error("Travel expense document run number exceeded");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return String(nextValue).padStart(3, "0");
+};
+
+const buildTravelExpenseDocumentNo = ({
+  createdBy,
+  quotationType,
+  quotationYear,
+  quotationNumber,
+  documentRunNumber,
+}) => {
+  const normalizedCreatedBy = parseOptionalText(createdBy).toLowerCase();
+  const safeType = parseOptionalText(quotationType);
+  const safeYear = Number(quotationYear);
+  const safeQuotationNumber = parseOptionalText(quotationNumber);
+  const safeDocumentRunNumber = parseOptionalText(documentRunNumber);
+  const companyPrefix = normalizedCreatedBy.includes("@optx")
+    ? "OPTX"
+    : normalizedCreatedBy.includes("@neonworks")
+      ? "NW-QT"
+      : "";
+
+  if (
+    !companyPrefix ||
+    !safeType ||
+    !safeYear ||
+    !safeQuotationNumber ||
+    !safeDocumentRunNumber
+  ) {
+    return "";
+  }
+
+  return `${companyPrefix}(${safeType})-${safeYear}-${safeQuotationNumber}-${safeDocumentRunNumber}`;
 };
 
 const canManageOwnPendingTravelExpense = (user, doc) => {
@@ -353,6 +428,8 @@ exports.createTravelExpense = async (req, res) => {
       tollFee,
       quotationId,
       quotationNumber,
+      quotationYear,
+      quotationType,
       quotationTitle,
       projectName,
       avoidTolls,
@@ -393,8 +470,20 @@ exports.createTravelExpense = async (req, res) => {
     const quotationSnapshot = await resolveQuotationPayload({
       quotationId,
       quotationNumber,
+      quotationYear,
+      quotationType,
       quotationTitle,
       projectName,
+    });
+    const documentRunNumber = await getNextTravelExpenseDocumentRunNumber(
+      quotationSnapshot.quotationType
+    );
+    const documentNo = buildTravelExpenseDocumentNo({
+      createdBy: user.username,
+      quotationType: quotationSnapshot.quotationType,
+      quotationYear: quotationSnapshot.quotationYear,
+      quotationNumber: quotationSnapshot.quotationNumber,
+      documentRunNumber,
     });
 
     const doc = await TravelExpense.create({
@@ -409,6 +498,8 @@ exports.createTravelExpense = async (req, res) => {
       requestedBy: user.username,
       requestedByLevel: Number(user.level) || 1,
       ...quotationSnapshot,
+      documentRunNumber,
+      documentNo,
       department: user.department || "",
       team: user.team || "",
       teamGroup: user.teamGroup || "",
@@ -461,6 +552,8 @@ exports.updateTravelExpense = async (req, res) => {
       tollFee,
       quotationId,
       quotationNumber,
+      quotationYear,
+      quotationType,
       quotationTitle,
       projectName,
       avoidTolls,
@@ -504,12 +597,16 @@ exports.updateTravelExpense = async (req, res) => {
       ? await resolveQuotationPayload({
           quotationId,
           quotationNumber,
+          quotationYear,
+          quotationType,
           quotationTitle,
           projectName,
         })
       : {
           quotationId: doc.quotationId || null,
           quotationNumber: doc.quotationNumber || "",
+          quotationYear: doc.quotationYear || null,
+          quotationType: doc.quotationType || "",
           quotationTitle: doc.quotationTitle || "",
           projectName: doc.projectName || "",
         };
@@ -532,6 +629,8 @@ exports.updateTravelExpense = async (req, res) => {
       note: note !== undefined ? note?.trim() || "" : doc.note,
       quotationId: quotationSnapshot.quotationId,
       quotationNumber: quotationSnapshot.quotationNumber,
+      quotationYear: quotationSnapshot.quotationYear,
+      quotationType: quotationSnapshot.quotationType,
       quotationTitle: quotationSnapshot.quotationTitle,
       projectName: quotationSnapshot.projectName,
       tollReceiptUrls,
@@ -547,6 +646,8 @@ exports.updateTravelExpense = async (req, res) => {
     doc.note = note !== undefined ? note?.trim() || "" : doc.note;
     doc.quotationId = quotationSnapshot.quotationId;
     doc.quotationNumber = quotationSnapshot.quotationNumber;
+    doc.quotationYear = quotationSnapshot.quotationYear;
+    doc.quotationType = quotationSnapshot.quotationType;
     doc.quotationTitle = quotationSnapshot.quotationTitle;
     doc.projectName = quotationSnapshot.projectName;
     doc.receiptUrl = tollReceiptUrls[0] || "";
