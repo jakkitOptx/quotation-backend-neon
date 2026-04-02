@@ -117,6 +117,35 @@ const parseOptionalText = (value) => {
   return value.trim();
 };
 
+const parseStringList = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => parseOptionalText(item)).filter(Boolean);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedValue);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => parseOptionalText(item)).filter(Boolean);
+    }
+  } catch (error) {
+    return trimmedValue
+      .split(",")
+      .map((item) => parseOptionalText(item))
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
 const createTravelExpenseLog = async ({
   travelExpenseId,
   performedBy,
@@ -284,6 +313,17 @@ const buildTravelExpenseDocumentNo = ({
   return `${companyPrefix}(${safeType})-${safeYear}-${safeQuotationNumber}-${safeDocumentRunNumber}`;
 };
 
+const canEditTravelExpense = (user, doc) => {
+  if (!user || !doc) return false;
+
+  const normalizedStatus = String(doc.status || "").trim().toLowerCase();
+  const canEditStatus = normalizedStatus === "pending" || normalizedStatus === "rejected";
+
+  if (!canEditStatus) return false;
+  if (user.role === "admin") return true;
+
+  return user.username === doc.requestedBy;
+};
 const canManageOwnPendingTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
   if (user.username !== doc.requestedBy) return false;
@@ -508,6 +548,14 @@ exports.createTravelExpense = async (req, res) => {
       approvalSteps: createApprovalSteps(user.level),
       currentApprovalLevel: buildApprovalLevels(user.level)[0] || null,
     });
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: "create",
+      description: `Travel expense created${
+        doc.documentNo ? ` with document no ${doc.documentNo}` : ""
+      }`,
+    });
 
     return res.status(201).json({
       message: "Travel expense created successfully",
@@ -538,7 +586,7 @@ exports.updateTravelExpense = async (req, res) => {
       return res.status(404).json({ message: "Travel expense not found" });
     }
 
-    if (!canManageOwnPendingTravelExpense(user, doc)) {
+    if (!canEditTravelExpense(user, doc)) {
       return res.status(403).json({
         message: "You do not have permission to edit this item",
       });
@@ -556,6 +604,7 @@ exports.updateTravelExpense = async (req, res) => {
       quotationType,
       quotationTitle,
       projectName,
+      retainedTollReceiptUrls,
       avoidTolls,
       avoidHighways,
       useExpressway,
@@ -614,10 +663,16 @@ exports.updateTravelExpense = async (req, res) => {
     const uploadedReceipts = await Promise.all(
       (req.files || []).map(uploadTollReceiptToS3)
     );
+    const keptReceiptUrls = parseStringList(retainedTollReceiptUrls);
+    const nextUploadedReceiptUrls = uploadedReceipts.map((file) => file.url);
     const tollReceiptUrls =
-      uploadedReceipts.length > 0
-        ? uploadedReceipts.map((file) => file.url)
-        : doc.tollReceiptUrls || [];
+      nextUploadedReceiptUrls.length > 0
+        ? [...keptReceiptUrls, ...nextUploadedReceiptUrls]
+        : keptReceiptUrls.length > 0
+          ? keptReceiptUrls
+          : retainedTollReceiptUrls !== undefined
+            ? []
+            : doc.tollReceiptUrls || [];
 
     const changedFields = buildUpdateChangeSummary(doc, {
       origin: estimate.cleanOrigin,
@@ -1079,3 +1134,6 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+
+
