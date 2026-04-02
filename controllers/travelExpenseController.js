@@ -508,6 +508,14 @@ exports.createTravelExpense = async (req, res) => {
       approvalSteps: createApprovalSteps(user.level),
       currentApprovalLevel: buildApprovalLevels(user.level)[0] || null,
     });
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: "create",
+      description: `Travel expense created${
+        doc.documentNo ? ` with document no ${doc.documentNo}` : ""
+      }`,
+    });
 
     return res.status(201).json({
       message: "Travel expense created successfully",
