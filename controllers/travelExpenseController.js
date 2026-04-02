@@ -313,6 +313,17 @@ const buildTravelExpenseDocumentNo = ({
   return `${companyPrefix}(${safeType})-${safeYear}-${safeQuotationNumber}-${safeDocumentRunNumber}`;
 };
 
+const canEditTravelExpense = (user, doc) => {
+  if (!user || !doc) return false;
+
+  const normalizedStatus = String(doc.status || "").trim().toLowerCase();
+  const canEditStatus = normalizedStatus === "pending" || normalizedStatus === "rejected";
+
+  if (!canEditStatus) return false;
+  if (user.role === "admin") return true;
+
+  return user.username === doc.requestedBy;
+};
 const canManageOwnPendingTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
   if (user.username !== doc.requestedBy) return false;
@@ -575,7 +586,7 @@ exports.updateTravelExpense = async (req, res) => {
       return res.status(404).json({ message: "Travel expense not found" });
     }
 
-    if (!canManageOwnPendingTravelExpense(user, doc)) {
+    if (!canEditTravelExpense(user, doc)) {
       return res.status(403).json({
         message: "You do not have permission to edit this item",
       });
@@ -1123,3 +1134,6 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+
+
