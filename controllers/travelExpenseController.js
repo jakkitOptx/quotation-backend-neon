@@ -117,6 +117,35 @@ const parseOptionalText = (value) => {
   return value.trim();
 };
 
+const parseStringList = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => parseOptionalText(item)).filter(Boolean);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedValue);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => parseOptionalText(item)).filter(Boolean);
+    }
+  } catch (error) {
+    return trimmedValue
+      .split(",")
+      .map((item) => parseOptionalText(item))
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
 const createTravelExpenseLog = async ({
   travelExpenseId,
   performedBy,
@@ -564,6 +593,7 @@ exports.updateTravelExpense = async (req, res) => {
       quotationType,
       quotationTitle,
       projectName,
+      retainedTollReceiptUrls,
       avoidTolls,
       avoidHighways,
       useExpressway,
@@ -622,10 +652,16 @@ exports.updateTravelExpense = async (req, res) => {
     const uploadedReceipts = await Promise.all(
       (req.files || []).map(uploadTollReceiptToS3)
     );
+    const keptReceiptUrls = parseStringList(retainedTollReceiptUrls);
+    const nextUploadedReceiptUrls = uploadedReceipts.map((file) => file.url);
     const tollReceiptUrls =
-      uploadedReceipts.length > 0
-        ? uploadedReceipts.map((file) => file.url)
-        : doc.tollReceiptUrls || [];
+      nextUploadedReceiptUrls.length > 0
+        ? [...keptReceiptUrls, ...nextUploadedReceiptUrls]
+        : keptReceiptUrls.length > 0
+          ? keptReceiptUrls
+          : retainedTollReceiptUrls !== undefined
+            ? []
+            : doc.tollReceiptUrls || [];
 
     const changedFields = buildUpdateChangeSummary(doc, {
       origin: estimate.cleanOrigin,
