@@ -30,6 +30,9 @@ exports.getDepartmentSpending = async (req, res) => {
           },
         ],
       },
+      {
+        approvalStatus: { $nin: ["Draft", "Canceled", "Rejected"] },
+      },
     ];
 
     let clientArray = [];
