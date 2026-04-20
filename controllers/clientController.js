@@ -1,10 +1,22 @@
 // controllers/clientController.js
 const Client = require("../models/Client");
 
+const normalizeClientPayload = (payload = {}) => {
+  const normalizedPayload = { ...payload };
+
+  if (Object.prototype.hasOwnProperty.call(normalizedPayload, "email")) {
+    normalizedPayload.email = normalizedPayload.email
+      ? String(normalizedPayload.email).trim().toLowerCase()
+      : undefined;
+  }
+
+  return normalizedPayload;
+};
+
 // Create Client
 exports.createClient = async (req, res) => {
   try {
-    const client = new Client(req.body);
+    const client = new Client(normalizeClientPayload(req.body));
     const savedClient = await client.save();
     res.status(201).json({ message: "Client created successfully", client: savedClient });
   } catch (error) {
@@ -17,7 +29,11 @@ exports.createClient = async (req, res) => {
 exports.updateClientById = async (req, res) => {
   try {
     const { id } = req.params;
-    const updatedClient = await Client.findByIdAndUpdate(id, req.body, { new: true });
+    const updatedClient = await Client.findByIdAndUpdate(
+      id,
+      normalizeClientPayload(req.body),
+      { new: true, runValidators: true }
+    );
     if (!updatedClient) {
       return res.status(404).json({ message: "Client not found" });
     }
