@@ -1,13 +1,61 @@
 // quotationController.js
+const crypto = require("crypto");
 const _ = require("lodash"); // ✅ Import lodash
 const Approval = require("../models/Approval");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 const Log = require("../models/Log"); // ✅ import Log model
+const { sendMail } = require("../utils/mailer");
 
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
   return (num * 100) % 1 >= 0.5 ? _.ceil(num, 2) : _.round(num, 2);
+};
+
+const createCustomerSigningToken = () => crypto.randomBytes(32).toString("hex");
+
+const hashCustomerSigningToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const normalizeEmailList = (value) => {
+  if (!value) return [];
+  const items = Array.isArray(value) ? value : String(value).split(",");
+
+  return items
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean);
+};
+
+const buildCustomerSigningUrl = (token, quotationId) => {
+  const rawBaseUrl =
+    process.env.CUSTOMER_SIGNING_URL_BASE ||
+    process.env.FRONTEND_URL ||
+    "https://neonworksfi.com/customer-sign";
+  const baseUrl = String(rawBaseUrl).replace(/\/+$/, "");
+  const query = quotationId
+    ? `?quotationId=${encodeURIComponent(String(quotationId))}`
+    : "";
+
+  return `${baseUrl}/${token}${query}`;
+};
+
+const formatQuotationNumber = (quotation) => {
+  const docYear = new Date(quotation.documentDate).getFullYear();
+  const companyPrefix = quotation.createdByUser?.includes("@optx")
+    ? "OPTX"
+    : "NW-QT";
+  const runFormatted = String(quotation.runNumber || "").padStart(3, "0");
+
+  return `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
+};
+
+const getRequestIpAddress = (req) => {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  if (forwardedFor) {
+    return String(forwardedFor).split(",")[0].trim();
+  }
+
+  return req.ip || req.socket?.remoteAddress || "";
 };
 
 // ✅ สร้างใบ Quotation ใหม่ (Neonworks version ใส่ department + รองรับ Draft)
@@ -207,7 +255,7 @@ exports.getQuotations = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
       )
       .populate({
         path: "approvalHierarchy",
@@ -280,7 +328,7 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
       .limit(limit)
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
       );
 
     const roundedQuotations = quotations.map((qt) => ({
@@ -351,7 +399,7 @@ exports.getQuotationsByEmail = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
       );
 
     const roundedQuotations = quotations.map((qt) => ({
@@ -415,7 +463,7 @@ exports.getQuotationsWithPagination = async (req, res) => {
         .limit(limit)
         .populate(
           "clientId",
-          "customerName address taxIdentificationNumber contactPhoneNumber"
+          "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
         )
         .populate({
           path: "approvalHierarchy",
@@ -464,7 +512,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
       )
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber"
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
       )
       .populate({
         path: "approvalHierarchy",
@@ -666,6 +714,8 @@ exports.duplicateQuotation = async (req, res) => {
       updatedAt,
       approvalHierarchy,
       approvedBy,
+      customerApproval,
+      customerSignature,
       cancelDate,
       canceledBy,
       reason, // จะรีเซ็ตค่าใหม่
@@ -677,6 +727,26 @@ exports.duplicateQuotation = async (req, res) => {
       runNumber: newRunNumber,
       approvalStatus: "Pending",
       approvedBy: undefined,
+      customerApproval: {
+        status: "Not Sent",
+        to: "",
+        cc: [],
+        tokenHash: "",
+        sentAt: null,
+        viewedAt: null,
+        acceptedAt: null,
+        rejectedAt: null,
+        expiresAt: null,
+      },
+      customerSignature: {
+        imageUrl: "",
+        signerName: "",
+        signerEmail: "",
+        signedAt: null,
+        ipAddress: "",
+        userAgent: "",
+        documentHash: "",
+      },
       approvalHierarchy: [],
       items: sanitizedItems,
       createdAt: new Date(),
@@ -834,6 +904,232 @@ exports.updateApprovalFlow = async (req, res) => {
   } catch (error) {
     console.error("Error updating approval flow:", error);
     res.status(500).json({ message: error.message });
+  }
+};
+
+exports.sendQuotationToCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { to, cc, expiresInDays = 14 } = req.body;
+    const cleanTo = String(to || "").trim().toLowerCase();
+    const cleanCc = normalizeEmailList(cc);
+    const days = Math.max(1, Number(expiresInDays) || 14);
+
+    if (!cleanTo) {
+      return res.status(400).json({ message: "Customer email is required" });
+    }
+
+    const quotation = await Quotation.findById(id).populate(
+      "clientId",
+      "customerName companyBaseName email"
+    );
+
+    if (!quotation) {
+      return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    if (quotation.approvalStatus !== "Approved") {
+      return res.status(400).json({
+        message: "Only approved quotations can be sent to customer",
+      });
+    }
+
+    if (quotation.customerApproval?.status === "Accepted") {
+      return res.status(409).json({
+        message: "Customer has already accepted this quotation",
+      });
+    }
+
+    const token = createCustomerSigningToken();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    const signingUrl = buildCustomerSigningUrl(token, quotation._id);
+    const quotationNumber = formatQuotationNumber(quotation);
+
+    quotation.customerApproval = {
+      status: "Sent",
+      to: cleanTo,
+      cc: cleanCc,
+      tokenHash: hashCustomerSigningToken(token),
+      sentAt: now,
+      viewedAt: null,
+      acceptedAt: null,
+      rejectedAt: null,
+      expiresAt,
+    };
+    quotation.customerSignature = {
+      imageUrl: "",
+      signerName: "",
+      signerEmail: "",
+      signedAt: null,
+      ipAddress: "",
+      userAgent: "",
+      documentHash: "",
+    };
+
+    await quotation.save();
+
+    try {
+      await sendMail({
+        to: cleanTo,
+        cc: cleanCc,
+        subject: `Quotation ${quotationNumber} is ready for signature`,
+        text: `Please review and sign quotation ${quotationNumber}: ${signingUrl}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5;">
+            <p>Dear Customer,</p>
+            <p>Please review and sign quotation <strong>${quotationNumber}</strong>.</p>
+            <p>
+              <a href="${signingUrl}" style="display: inline-block; padding: 10px 16px; background: #111827; color: #ffffff; text-decoration: none; border-radius: 6px;">
+                Open Quotation
+              </a>
+            </p>
+            <p>If the button does not work, please open this link:</p>
+            <p><a href="${signingUrl}">${signingUrl}</a></p>
+            <p>This signing link expires on ${expiresAt.toISOString()}.</p>
+          </div>
+        `,
+      });
+    } catch (mailError) {
+      quotation.customerApproval = {
+        status: "Not Sent",
+        to: cleanTo,
+        cc: cleanCc,
+        tokenHash: "",
+        sentAt: null,
+        viewedAt: null,
+        acceptedAt: null,
+        rejectedAt: null,
+        expiresAt: null,
+      };
+      await quotation.save();
+
+      console.error("Send quotation customer email failed:", mailError);
+      return res.status(502).json({
+        message: "Failed to send customer email",
+        error: mailError.message,
+      });
+    }
+
+    const performedBy = req.user?.username || "unknown";
+    await Log.create({
+      quotationId: quotation._id,
+      action: "send_to_customer",
+      performedBy,
+      description: `Sent quotation ${quotationNumber} to ${cleanTo}`,
+    });
+
+    return res.status(200).json({
+      message: "Quotation sent to customer successfully",
+      data: {
+        quotationId: quotation._id,
+        quotationNumber,
+        customerApproval: {
+          status: quotation.customerApproval.status,
+          to: quotation.customerApproval.to,
+          cc: quotation.customerApproval.cc,
+          sentAt: quotation.customerApproval.sentAt,
+          expiresAt: quotation.customerApproval.expiresAt,
+        },
+        signingUrl,
+      },
+    });
+  } catch (error) {
+    console.error("Error sending quotation to customer:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.acceptCustomerSignature = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const {
+      signatureImageUrl,
+      imageUrl,
+      signerName,
+      signerEmail,
+      documentHash,
+    } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ message: "Signing token is required" });
+    }
+
+    const signatureUrl = signatureImageUrl || imageUrl;
+    if (!signatureUrl) {
+      return res.status(400).json({ message: "Signature image url is required" });
+    }
+
+    const quotation = await Quotation.findOne({
+      "customerApproval.tokenHash": hashCustomerSigningToken(token),
+    });
+
+    if (!quotation) {
+      return res.status(404).json({ message: "Invalid signing token" });
+    }
+
+    if (
+      quotation.customerApproval?.expiresAt &&
+      quotation.customerApproval.expiresAt < new Date()
+    ) {
+      quotation.customerApproval.status = "Expired";
+      await quotation.save();
+
+      return res.status(410).json({ message: "Signing token has expired" });
+    }
+
+    if (quotation.customerApproval?.status === "Accepted") {
+      return res.status(409).json({ message: "Quotation already accepted" });
+    }
+
+    if (quotation.customerApproval?.status === "Rejected") {
+      return res.status(409).json({ message: "Rejected quotation cannot be accepted" });
+    }
+
+    const now = new Date();
+    const acceptedEmail = String(
+      signerEmail || quotation.customerApproval?.to || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    quotation.approvalStatus = "Approved";
+    quotation.customerApproval.status = "Accepted";
+    quotation.customerApproval.acceptedAt = now;
+    quotation.customerSignature = {
+      imageUrl: signatureUrl,
+      signerName: String(signerName || "").trim(),
+      signerEmail: acceptedEmail,
+      signedAt: now,
+      ipAddress: getRequestIpAddress(req),
+      userAgent: req.get("user-agent") || "",
+      documentHash: String(documentHash || "").trim(),
+    };
+
+    await quotation.save();
+
+    await Log.create({
+      quotationId: quotation._id,
+      action: "customer_sign_accept",
+      performedBy: acceptedEmail || "customer",
+      description: `Customer accepted quotation ${formatQuotationNumber(quotation)}`,
+    });
+
+    return res.status(200).json({
+      message: "Quotation accepted successfully",
+      data: {
+        quotationId: quotation._id,
+        approvalStatus: quotation.approvalStatus,
+        customerApproval: {
+          status: quotation.customerApproval.status,
+          acceptedAt: quotation.customerApproval.acceptedAt,
+        },
+        customerSignature: quotation.customerSignature,
+      },
+    });
+  } catch (error) {
+    console.error("Error accepting customer signature:", error);
+    return res.status(500).json({ message: error.message });
   }
 };
 
