@@ -23,6 +23,30 @@ const QuotationSchema = new mongoose.Schema({
   description: { type: String }, // คำอธิบายเอกสาร
   approvalStatus: { type: String, enum: ["Draft", "Pending", "Approved", "Rejected", "Canceled"], default: "Pending" },
   approvedBy: { type: String },
+  customerApproval: {
+    status: {
+      type: String,
+      enum: ["Not Sent", "Sent", "Viewed", "Accepted", "Rejected", "Expired"],
+      default: "Not Sent",
+    },
+    to: { type: String, trim: true, lowercase: true, default: "" },
+    cc: [{ type: String, trim: true, lowercase: true }],
+    tokenHash: { type: String, default: "" },
+    sentAt: { type: Date, default: null },
+    viewedAt: { type: Date, default: null },
+    acceptedAt: { type: Date, default: null },
+    rejectedAt: { type: Date, default: null },
+    expiresAt: { type: Date, default: null },
+  },
+  customerSignature: {
+    imageUrl: { type: String, default: "" },
+    signerName: { type: String, default: "" },
+    signerEmail: { type: String, trim: true, lowercase: true, default: "" },
+    signedAt: { type: Date, default: null },
+    ipAddress: { type: String, default: "" },
+    userAgent: { type: String, default: "" },
+    documentHash: { type: String, default: "" },
+  },
   runNumber: { type: String, required: true }, // เลขที่ใบเสนอราคา
   type: { type: String, default: "" }, // ประเภทเอกสาร
   approvalHierarchy: [
@@ -107,5 +131,7 @@ QuotationSchema.set("toObject", { virtuals: true });
 QuotationSchema.set("toJSON", { virtuals: true });
 
 QuotationSchema.index({ approvalStatus: 1, documentDate: 1 });
+QuotationSchema.index({ "customerApproval.tokenHash": 1 });
+QuotationSchema.index({ "customerApproval.status": 1 });
 
 module.exports = mongoose.model("Quotation", QuotationSchema);

@@ -67,6 +67,7 @@ const reportRoutes = require("./routes/reportRoutes");
 const meetingRoomRoutes = require("./routes/meetingRoomRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const travelExpenseRoutes = require("./routes/travelExpenseRoutes");
+const customerSignRoutes = require("./routes/customerSignRoutes");
 
 app.use("/api/quotations", quotationRoutes);
 app.use("/api/approvals", approvalRoutes);
@@ -86,6 +87,7 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/meeting-rooms", meetingRoomRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/travel-expenses", travelExpenseRoutes);
+app.use("/api/customer-sign", customerSignRoutes);
 
 app.get("/", (req, res) => {
   res.status(200).json({ message: "NEON FINANCE API is running!" });

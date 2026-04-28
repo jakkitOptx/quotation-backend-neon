@@ -14,10 +14,11 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-async function sendMail({ to, subject, html, text }) {
+async function sendMail({ to, cc, subject, html, text }) {
   return transporter.sendMail({
     from: `"NEON FINANCE" <${process.env.SMTP_USER}>`,
     to,
+    cc,
     subject,
     html,
     text,

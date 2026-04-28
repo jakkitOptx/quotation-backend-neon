@@ -382,6 +382,12 @@ router.post(
   quotationController.duplicateQuotation,
 );
 
+router.post(
+  "/:id/send-to-customer",
+  authMiddleware,
+  quotationController.sendQuotationToCustomer,
+);
+
 // ✅ อัปเดต Flow ของใบเสนอราคาเดิมให้เป็น Flow ปัจจุบัน
 router.patch(
   "/:id/update-approval-flow",
@@ -392,7 +398,7 @@ router.get("/:id", async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages",
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages customerApproval customerSignature",
       )
 
       .populate({
@@ -405,7 +411,7 @@ router.get("/:id", async (req, res) => {
       })
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber",
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName",
       ); // ✅ เพิ่มการ populate clientId
 
     if (!quotation) {
