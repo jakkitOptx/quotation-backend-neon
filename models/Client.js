@@ -10,6 +10,18 @@ const ClientSchema = new mongoose.Schema({
     lowercase: true,
     default: undefined,
   },
+  authorizedApprovers: [
+    {
+      name: { type: String, trim: true, default: "" },
+      email: {
+        type: String,
+        trim: true,
+        lowercase: true,
+        required: true,
+      },
+      position: { type: String, trim: true, default: "" },
+    },
+  ],
   address: { type: String, required: true },
   taxIdentificationNumber: { type: String, required: true }, // เปลี่ยนเป็น String
   contactPhoneNumber: { type: String, required: true }, // เปลี่ยนเป็น String
