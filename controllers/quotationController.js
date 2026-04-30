@@ -6,6 +6,7 @@ const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 const Log = require("../models/Log"); // ✅ import Log model
 const { sendMail } = require("../utils/mailer");
+const { uploadBufferToS3, generateSignedS3Url } = require("../utils/s3Client");
 
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
@@ -56,6 +57,62 @@ const getRequestIpAddress = (req) => {
   }
 
   return req.ip || req.socket?.remoteAddress || "";
+};
+
+const parseBase64Image = (value = "") => {
+  const match = String(value).match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/);
+  if (!match) return null;
+
+  const contentType = match[1] === "image/jpg" ? "image/jpeg" : match[1];
+  const extension = contentType.split("/")[1] === "jpeg" ? "jpg" : contentType.split("/")[1];
+
+  return {
+    buffer: Buffer.from(match[2], "base64"),
+    contentType,
+    extension,
+  };
+};
+
+const uploadCustomerSignatureImage = async ({ quotationId, signatureImageBase64 }) => {
+  const bucket = process.env.AWS_BUCKET;
+  const folder = process.env.AWS_CUSTOMER_SIGNATURE_FOLDER || "customer-signatures";
+  const parsedImage = parseBase64Image(signatureImageBase64);
+
+  if (!parsedImage) {
+    throw new Error("Invalid signature image base64");
+  }
+
+  if (!bucket || !process.env.AWS_REGION) {
+    throw new Error("S3 configuration is incomplete");
+  }
+
+  const result = await uploadBufferToS3({
+    bucket,
+    folder: `${folder}/${quotationId}`,
+    fileName: `customer-signature.${parsedImage.extension}`,
+    buffer: parsedImage.buffer,
+    contentType: parsedImage.contentType,
+  });
+
+  return result.url;
+};
+
+const createCustomerSignatureSignedUrl = async (signatureUrl = "") => {
+  if (!signatureUrl) return "";
+  if (String(signatureUrl).startsWith("data:")) return signatureUrl;
+
+  const bucket = process.env.AWS_BUCKET;
+
+  if (!bucket || !process.env.AWS_REGION) {
+    throw new Error("S3 configuration is incomplete");
+  }
+
+  const result = await generateSignedS3Url({
+    bucket,
+    key: signatureUrl,
+  });
+
+  return result.url;
 };
 
 // ✅ สร้างใบ Quotation ใหม่ (Neonworks version ใส่ department + รองรับ Draft)
@@ -1044,6 +1101,7 @@ exports.acceptCustomerSignature = async (req, res) => {
   try {
     const { token } = req.params;
     const {
+      signatureImageBase64,
       signatureImageUrl,
       imageUrl,
       signerName,
@@ -1053,11 +1111,6 @@ exports.acceptCustomerSignature = async (req, res) => {
 
     if (!token) {
       return res.status(400).json({ message: "Signing token is required" });
-    }
-
-    const signatureUrl = signatureImageUrl || imageUrl;
-    if (!signatureUrl) {
-      return res.status(400).json({ message: "Signature image url is required" });
     }
 
     const quotation = await Quotation.findOne({
@@ -1084,6 +1137,19 @@ exports.acceptCustomerSignature = async (req, res) => {
 
     if (quotation.customerApproval?.status === "Rejected") {
       return res.status(409).json({ message: "Rejected quotation cannot be accepted" });
+    }
+
+    let signatureUrl = signatureImageUrl || imageUrl;
+
+    if (!signatureUrl && signatureImageBase64) {
+      signatureUrl = await uploadCustomerSignatureImage({
+        quotationId: quotation._id,
+        signatureImageBase64,
+      });
+    }
+
+    if (!signatureUrl) {
+      return res.status(400).json({ message: "Signature image url is required" });
     }
 
     const now = new Date();
@@ -1115,6 +1181,12 @@ exports.acceptCustomerSignature = async (req, res) => {
       description: `Customer accepted quotation ${formatQuotationNumber(quotation)}`,
     });
 
+    const customerSignature =
+      quotation.customerSignature?.toObject?.() || quotation.customerSignature || {};
+    const signedImageUrl = await createCustomerSignatureSignedUrl(
+      customerSignature.imageUrl
+    );
+
     return res.status(200).json({
       message: "Quotation accepted successfully",
       data: {
@@ -1124,11 +1196,57 @@ exports.acceptCustomerSignature = async (req, res) => {
           status: quotation.customerApproval.status,
           acceptedAt: quotation.customerApproval.acceptedAt,
         },
-        customerSignature: quotation.customerSignature,
+        customerSignature: {
+          ...customerSignature,
+          signedImageUrl,
+        },
       },
     });
   } catch (error) {
     console.error("Error accepting customer signature:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getCustomerSignatureSignedUrl = async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ message: "Signing token is required" });
+    }
+
+    const quotation = await Quotation.findOne({
+      "customerApproval.tokenHash": hashCustomerSigningToken(token),
+    }).select("customerApproval customerSignature");
+
+    if (!quotation) {
+      return res.status(404).json({ message: "Invalid signing token" });
+    }
+
+    if (
+      quotation.customerApproval?.expiresAt &&
+      quotation.customerApproval.expiresAt < new Date()
+    ) {
+      return res.status(410).json({ message: "Signing token has expired" });
+    }
+
+    const imageUrl = quotation.customerSignature?.imageUrl || "";
+
+    if (!imageUrl) {
+      return res.status(404).json({ message: "Customer signature image not found" });
+    }
+
+    const signedImageUrl = await createCustomerSignatureSignedUrl(imageUrl);
+
+    return res.status(200).json({
+      data: {
+        imageUrl,
+        signedImageUrl,
+      },
+    });
+  } catch (error) {
+    console.error("Error generating customer signature signed URL:", error);
     return res.status(500).json({ message: error.message });
   }
 };

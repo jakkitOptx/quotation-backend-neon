@@ -1,6 +1,28 @@
 // controllers/clientController.js
 const Client = require("../models/Client");
 
+const normalizeAuthorizedApprovers = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return {
+          name: "",
+          email: item.trim().toLowerCase(),
+          position: "",
+        };
+      }
+
+      return {
+        name: item?.name ? String(item.name).trim() : "",
+        email: item?.email ? String(item.email).trim().toLowerCase() : "",
+        position: item?.position ? String(item.position).trim() : "",
+      };
+    })
+    .filter((item) => item.email);
+};
+
 const normalizeClientPayload = (payload = {}) => {
   const normalizedPayload = { ...payload };
 
@@ -9,6 +31,23 @@ const normalizeClientPayload = (payload = {}) => {
       ? String(normalizedPayload.email).trim().toLowerCase()
       : undefined;
   }
+
+  if (
+    Object.prototype.hasOwnProperty.call(normalizedPayload, "approverEmails") &&
+    !Object.prototype.hasOwnProperty.call(normalizedPayload, "authorizedApprovers")
+  ) {
+    normalizedPayload.authorizedApprovers = normalizeAuthorizedApprovers(
+      normalizedPayload.approverEmails
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(normalizedPayload, "authorizedApprovers")) {
+    normalizedPayload.authorizedApprovers = normalizeAuthorizedApprovers(
+      normalizedPayload.authorizedApprovers
+    );
+  }
+
+  delete normalizedPayload.approverEmails;
 
   return normalizedPayload;
 };
