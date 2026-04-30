@@ -1,12 +1,18 @@
 // quotationController.js
 const crypto = require("crypto");
 const _ = require("lodash"); // ✅ Import lodash
+const { GetObjectCommand } = require("@aws-sdk/client-s3");
 const Approval = require("../models/Approval");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 const Log = require("../models/Log"); // ✅ import Log model
 const { sendMail } = require("../utils/mailer");
-const { uploadBufferToS3, generateSignedS3Url } = require("../utils/s3Client");
+const {
+  uploadBufferToS3,
+  generateSignedS3Url,
+  s3,
+  extractS3KeyFromUrl,
+} = require("../utils/s3Client");
 
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
@@ -113,6 +119,40 @@ const createCustomerSignatureSignedUrl = async (signatureUrl = "") => {
   });
 
   return result.url;
+};
+
+const streamToBuffer = async (stream) => {
+  if (stream?.transformToByteArray) {
+    return Buffer.from(await stream.transformToByteArray());
+  }
+
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+  });
+};
+
+const createCustomerSignatureDataUrl = async (signatureUrl = "") => {
+  if (!signatureUrl) return "";
+  if (String(signatureUrl).startsWith("data:")) return signatureUrl;
+
+  const bucket = process.env.AWS_BUCKET;
+  const key = extractS3KeyFromUrl(signatureUrl);
+
+  if (!bucket || !key) return "";
+
+  const result = await s3.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    })
+  );
+  const buffer = await streamToBuffer(result.Body);
+  const contentType = result.ContentType || "image/png";
+
+  return `data:${contentType};base64,${buffer.toString("base64")}`;
 };
 
 // ✅ สร้างใบ Quotation ใหม่ (Neonworks version ใส่ department + รองรับ Draft)
@@ -1183,9 +1223,10 @@ exports.acceptCustomerSignature = async (req, res) => {
 
     const customerSignature =
       quotation.customerSignature?.toObject?.() || quotation.customerSignature || {};
-    const signedImageUrl = await createCustomerSignatureSignedUrl(
-      customerSignature.imageUrl
-    );
+    const [signedImageUrl, imageDataUrl] = await Promise.all([
+      createCustomerSignatureSignedUrl(customerSignature.imageUrl),
+      createCustomerSignatureDataUrl(customerSignature.imageUrl),
+    ]);
 
     return res.status(200).json({
       message: "Quotation accepted successfully",
@@ -1199,6 +1240,7 @@ exports.acceptCustomerSignature = async (req, res) => {
         customerSignature: {
           ...customerSignature,
           signedImageUrl,
+          imageDataUrl,
         },
       },
     });
@@ -1237,12 +1279,16 @@ exports.getCustomerSignatureSignedUrl = async (req, res) => {
       return res.status(404).json({ message: "Customer signature image not found" });
     }
 
-    const signedImageUrl = await createCustomerSignatureSignedUrl(imageUrl);
+    const [signedImageUrl, imageDataUrl] = await Promise.all([
+      createCustomerSignatureSignedUrl(imageUrl),
+      createCustomerSignatureDataUrl(imageUrl),
+    ]);
 
     return res.status(200).json({
       data: {
         imageUrl,
         signedImageUrl,
+        imageDataUrl,
       },
     });
   } catch (error) {
