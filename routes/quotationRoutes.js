@@ -411,7 +411,7 @@ router.get("/:id", async (req, res) => {
       })
       .populate(
         "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName",
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName email authorizedApprovers",
       ); // ✅ เพิ่มการ populate clientId
 
     if (!quotation) {
