@@ -690,6 +690,8 @@ exports.resetQuotation = async (req, res) => {
   try {
     const { id } = req.params;
     const quotation = await Quotation.findById(id);
+    const user = req.user;
+    const performedBy = user?.username || "unknown";
 
     if (!quotation) {
       return res.status(404).json({ message: "Quotation not found" });
@@ -719,12 +721,60 @@ exports.resetQuotation = async (req, res) => {
     await approval.save();
 
     // ✅ เปลี่ยน Quotation เป็น Pending
+    const customerApproval =
+      quotation.customerApproval?.toObject?.() || quotation.customerApproval || {};
+    const customerSignature =
+      quotation.customerSignature?.toObject?.() || quotation.customerSignature || {};
+    const shouldArchiveESign =
+      customerApproval.status && customerApproval.status !== "Not Sent";
+
+    if (shouldArchiveESign) {
+      quotation.customerESignHistory = quotation.customerESignHistory || [];
+      quotation.customerESignHistory.push({
+        customerApproval,
+        customerSignature,
+        quotationSnapshot: {
+          title: quotation.title,
+          projectName: quotation.projectName,
+          runNumber: quotation.runNumber,
+          type: quotation.type,
+          documentDate: quotation.documentDate,
+          amount: quotation.amount,
+          total: quotation.total,
+          amountBeforeTax: quotation.amountBeforeTax,
+          vat: quotation.vat,
+          netAmount: quotation.netAmount,
+          approvalStatus: quotation.approvalStatus,
+        },
+        archivedAt: new Date(),
+        archivedBy: performedBy,
+        reason: "Quotation unlocked for revision",
+      });
+
+      quotation.customerApproval = {
+        status: "Not Sent",
+        to: "",
+        cc: [],
+        tokenHash: "",
+        sentAt: null,
+        viewedAt: null,
+        acceptedAt: null,
+        rejectedAt: null,
+        expiresAt: null,
+      };
+      quotation.customerSignature = {
+        imageUrl: "",
+        signerName: "",
+        signerEmail: "",
+        signedAt: null,
+        ipAddress: "",
+        userAgent: "",
+        documentHash: "",
+      };
+    }
+
     quotation.approvalStatus = "Pending";
     await quotation.save();
-
-    // ✅ บันทึก Log (ใช้ข้อมูลจาก token โดยไม่ต้อง query DB)
-    const user = req.user;
-    const performedBy = user?.username || "unknown";
 
     // ✅ ใช้ prefix เดียวกับ OPTX/Neon (OPTX หรือ NW-QT)
     const companyPrefix = performedBy.includes("@optx") ? "OPTX" : "NW-QT";
@@ -744,6 +794,8 @@ exports.resetQuotation = async (req, res) => {
       message: "Quotation reset successfully",
       approvalStatus: quotation.approvalStatus,
       approvalHierarchy: approval.approvalHierarchy,
+      customerApproval: quotation.customerApproval,
+      customerESignHistory: quotation.customerESignHistory,
     });
   } catch (error) {
     console.error("Error resetting quotation:", error);
@@ -813,6 +865,7 @@ exports.duplicateQuotation = async (req, res) => {
       approvedBy,
       customerApproval,
       customerSignature,
+      customerESignHistory,
       cancelDate,
       canceledBy,
       reason, // จะรีเซ็ตค่าใหม่
@@ -844,6 +897,7 @@ exports.duplicateQuotation = async (req, res) => {
         userAgent: "",
         documentHash: "",
       },
+      customerESignHistory: [],
       approvalHierarchy: [],
       items: sanitizedItems,
       createdAt: new Date(),
@@ -1133,6 +1187,56 @@ exports.sendQuotationToCustomer = async (req, res) => {
     });
   } catch (error) {
     console.error("Error sending quotation to customer:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.verifyCustomerSigningLink = async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ message: "Signing token is required" });
+    }
+
+    const quotation = await Quotation.findOne({
+      "customerApproval.tokenHash": hashCustomerSigningToken(token),
+    }).populate("clientId", "customerName companyBaseName email authorizedApprovers");
+
+    if (!quotation) {
+      return res.status(404).json({ message: "Invalid signing token" });
+    }
+
+    if (
+      quotation.customerApproval?.expiresAt &&
+      quotation.customerApproval.expiresAt < new Date()
+    ) {
+      quotation.customerApproval.status = "Expired";
+      await quotation.save();
+
+      return res.status(410).json({ message: "Signing token has expired" });
+    }
+
+    if (quotation.customerApproval?.status === "Rejected") {
+      return res.status(409).json({ message: "Rejected quotation cannot be signed" });
+    }
+
+    if (quotation.customerApproval?.status === "Sent") {
+      quotation.customerApproval.status = "Viewed";
+      quotation.customerApproval.viewedAt = new Date();
+      await quotation.save();
+    }
+
+    return res.status(200).json({
+      data: {
+        quotationId: quotation._id,
+        quotation,
+        customerApproval: quotation.customerApproval,
+        customerSignature: quotation.customerSignature,
+      },
+    });
+  } catch (error) {
+    console.error("Error verifying customer signing link:", error);
     return res.status(500).json({ message: error.message });
   }
 };

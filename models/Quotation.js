@@ -47,6 +47,16 @@ const QuotationSchema = new mongoose.Schema({
     userAgent: { type: String, default: "" },
     documentHash: { type: String, default: "" },
   },
+  customerESignHistory: [
+    {
+      customerApproval: { type: mongoose.Schema.Types.Mixed, default: {} },
+      customerSignature: { type: mongoose.Schema.Types.Mixed, default: {} },
+      quotationSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
+      archivedAt: { type: Date, default: Date.now },
+      archivedBy: { type: String, default: "" },
+      reason: { type: String, default: "" },
+    },
+  ],
   runNumber: { type: String, required: true }, // เลขที่ใบเสนอราคา
   type: { type: String, default: "" }, // ประเภทเอกสาร
   approvalHierarchy: [
