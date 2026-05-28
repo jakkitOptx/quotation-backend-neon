@@ -1,5 +1,31 @@
 const Log = require("../models/Log");
-// ✅ get all logs (with optional date filter)
+
+const getThreeMonthsAgo = () => {
+  const date = new Date();
+  date.setMonth(date.getMonth() - 3);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const applyTimestampFilter = (filter, startDate, endDate) => {
+  filter.timestamp = {};
+
+  if (startDate) {
+    filter.timestamp.$gte = new Date(startDate);
+  }
+
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    filter.timestamp.$lte = end;
+  }
+
+  if (!startDate && !endDate) {
+    filter.timestamp.$gte = getThreeMonthsAgo();
+  }
+};
+
+// get all logs (defaults to the latest 3 months)
 exports.getAllLogs = async (req, res) => {
   try {
     const { startDate, endDate, resourceType, quotationId, travelExpenseId } =
@@ -19,17 +45,7 @@ exports.getAllLogs = async (req, res) => {
       filter.travelExpenseId = travelExpenseId;
     }
 
-    if (startDate || endDate) {
-      filter.timestamp = {};
-      if (startDate) {
-        filter.timestamp.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.timestamp.$lte = end;
-      }
-    }
+    applyTimestampFilter(filter, startDate, endDate);
 
     const logs = await Log.find(filter).sort({ timestamp: -1 });
     res.status(200).json(logs);
@@ -38,7 +54,8 @@ exports.getAllLogs = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-// ✅ get logs by quotationId (with optional date filter)
+
+// get logs by quotationId (defaults to the latest 3 months)
 exports.getLogsByQuotation = async (req, res) => {
   try {
     const { quotationId } = req.params;
@@ -46,17 +63,7 @@ exports.getLogsByQuotation = async (req, res) => {
 
     const filter = { quotationId };
 
-    if (startDate || endDate) {
-      filter.timestamp = {};
-      if (startDate) {
-        filter.timestamp.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.timestamp.$lte = end;
-      }
-    }
+    applyTimestampFilter(filter, startDate, endDate);
 
     const logs = await Log.find(filter).sort({ timestamp: -1 }).exec();
     res.status(200).json(logs);
@@ -76,17 +83,7 @@ exports.getLogsByTravelExpense = async (req, res) => {
       resourceType: "travel-expense",
     };
 
-    if (startDate || endDate) {
-      filter.timestamp = {};
-      if (startDate) {
-        filter.timestamp.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.timestamp.$lte = end;
-      }
-    }
+    applyTimestampFilter(filter, startDate, endDate);
 
     const logs = await Log.find(filter).sort({ timestamp: -1 }).exec();
     res.status(200).json(logs);
