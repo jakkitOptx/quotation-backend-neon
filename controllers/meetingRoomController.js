@@ -8,16 +8,36 @@ const timeToMin = (t) => {
   return h * 60 + m;
 };
 
-// ✅ สร้างห้อง default 3 ห้อง (ถ้าใน DB ยังไม่มี)
-const ensureDefaultRooms = async () => {
-  const count = await MeetingRoom.countDocuments();
-  if (count > 0) return;
+const defaultRooms = [
+  { code: "R1", name: "Meeting Room ตึก Neonworks ชั้น 1", floor: 1, capacity: 8 },
+  { code: "R2", name: "Meeting Room ตึก Neonworks ชั้น 2", floor: 2, capacity: 5 },
+  { code: "R3", name: "Meeting Room ตึก Neonworks ชั้น 3", floor: 3, capacity: 12 },
+  {
+    code: "R4",
+    name: "ตึกฝั่ง TV Thunder ชั้น 1 (ตรงข้ามห้อง HR)",
+    floor: 1,
+    capacity: 8,
+    capacityLabel: "5-8",
+  },
+  {
+    code: "R5",
+    name: "ตึกฝั่ง TV Thunder ชั้น 2",
+    floor: 2,
+    capacity: 8,
+    capacityLabel: "5-8",
+  },
+];
 
-  await MeetingRoom.insertMany([
-    { code: "R1", name: "Meeting Room ชั้น 1", floor: 1, capacity: 8 },
-    { code: "R2", name: "Meeting Room ชั้น 2", floor: 2, capacity: 5 },
-    { code: "R3", name: "Meeting Room ชั้น 3", floor: 3, capacity: 12 },
-  ]);
+const ensureDefaultRooms = async () => {
+  await MeetingRoom.bulkWrite(
+    defaultRooms.map((room) => ({
+      updateOne: {
+        filter: { code: room.code },
+        update: { $set: room },
+        upsert: true,
+      },
+    }))
+  );
 };
 
 // ------------------------
@@ -26,7 +46,10 @@ const ensureDefaultRooms = async () => {
 exports.getRooms = async (req, res) => {
   try {
     await ensureDefaultRooms();
-    const rooms = await MeetingRoom.find({ isActive: true }).sort({ floor: 1 });
+    const rooms = await MeetingRoom.find({ isActive: true }).sort({
+      floor: 1,
+      code: 1,
+    });
     res.json(rooms);
   } catch (err) {
     res
