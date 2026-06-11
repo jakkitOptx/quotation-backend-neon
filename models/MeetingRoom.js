@@ -3,10 +3,11 @@ const mongoose = require("mongoose");
 
 const MeetingRoomSchema = new mongoose.Schema(
   {
-    code: { type: String, required: true, unique: true, index: true }, // R1, R2, R3
+    code: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true },
     floor: { type: Number, required: true },
     capacity: { type: Number, required: true },
+    capacityLabel: { type: String, default: "" },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
