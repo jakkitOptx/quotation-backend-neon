@@ -9,15 +9,43 @@ const timeToMin = (t) => {
 };
 
 const defaultRooms = [
-  { code: "R1", name: "Meeting Room ตึก Neonworks ชั้น 1", floor: 1, capacity: 8 },
-  { code: "R2", name: "Meeting Room ตึก Neonworks ชั้น 2", floor: 2, capacity: 5 },
-  { code: "R3", name: "Meeting Room ตึก Neonworks ชั้น 3", floor: 3, capacity: 12 },
+  {
+    code: "R1",
+    name: "Meeting Room ตึก Neonworks ชั้น 1",
+    floor: 1,
+    capacity: 8,
+    sortOrder: 1,
+    isComingSoon: false,
+    comingSoonMessage: "",
+  },
+  {
+    code: "R2",
+    name: "Meeting Room ตึก Neonworks ชั้น 2",
+    floor: 2,
+    capacity: 5,
+    sortOrder: 2,
+    isComingSoon: false,
+    comingSoonMessage: "",
+  },
+  {
+    code: "R3",
+    name: "Meeting Room ตึก Neonworks ชั้น 3",
+    floor: 3,
+    capacity: 12,
+    sortOrder: 3,
+    isComingSoon: false,
+    comingSoonMessage: "",
+  },
   {
     code: "R4",
     name: "ตึกฝั่ง TV Thunder ชั้น 1 (ตรงข้ามห้อง HR)",
     floor: 1,
     capacity: 8,
     capacityLabel: "5-8",
+    sortOrder: 4,
+    isComingSoon: true,
+    comingSoonMessage:
+      "หากต้องการใช้ห้องประชุมฝั่ง TV Thunder ให้ติดต่อพี่ละอองดาว ผ่าน LINE",
   },
   {
     code: "R5",
@@ -25,6 +53,10 @@ const defaultRooms = [
     floor: 2,
     capacity: 8,
     capacityLabel: "5-8",
+    sortOrder: 5,
+    isComingSoon: true,
+    comingSoonMessage:
+      "หากต้องการใช้ห้องประชุมฝั่ง TV Thunder ให้ติดต่อพี่ละอองดาว ผ่าน LINE",
   },
 ];
 
@@ -47,6 +79,7 @@ exports.getRooms = async (req, res) => {
   try {
     await ensureDefaultRooms();
     const rooms = await MeetingRoom.find({ isActive: true }).sort({
+      sortOrder: 1,
       floor: 1,
       code: 1,
     });
@@ -100,6 +133,19 @@ exports.createBooking = async (req, res) => {
       return res
         .status(400)
         .json({ message: "endTime must be greater than startTime" });
+    }
+
+    const room = await MeetingRoom.findById(roomId).lean();
+    if (!room) {
+      return res.status(404).json({ message: "Room not found" });
+    }
+
+    if (room.isComingSoon) {
+      return res.status(403).json({
+        message:
+          room.comingSoonMessage ||
+          "This meeting room is coming soon and cannot be booked yet",
+      });
     }
 
     // ✅ เช็คชน
@@ -204,6 +250,19 @@ exports.updateBooking = async (req, res) => {
     const newDateKey = dateKey || booking.dateKey;
     const newStartTime = startTime || booking.startTime;
     const newEndTime = endTime || booking.endTime;
+
+    const targetRoom = await MeetingRoom.findById(newRoomId).lean();
+    if (!targetRoom) {
+      return res.status(404).json({ message: "Room not found" });
+    }
+
+    if (targetRoom.isComingSoon) {
+      return res.status(403).json({
+        message:
+          targetRoom.comingSoonMessage ||
+          "This meeting room is coming soon and cannot be booked yet",
+      });
+    }
 
     const newStartMin = timeToMin(newStartTime);
     const newEndMin = timeToMin(newEndTime);
