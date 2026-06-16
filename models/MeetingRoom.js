@@ -8,6 +8,9 @@ const MeetingRoomSchema = new mongoose.Schema(
     floor: { type: Number, required: true },
     capacity: { type: Number, required: true },
     capacityLabel: { type: String, default: "" },
+    sortOrder: { type: Number, default: 0 },
+    isComingSoon: { type: Boolean, default: false },
+    comingSoonMessage: { type: String, default: "" },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
