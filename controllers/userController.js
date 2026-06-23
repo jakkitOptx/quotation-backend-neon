@@ -57,6 +57,7 @@ exports.updateUserProfile = async (req, res) => {
       lastName,
       username,
       password,
+      level,
       department,
       position,
       flow,
@@ -71,8 +72,14 @@ exports.updateUserProfile = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    if (req.body.level) {
-      return res.status(403).json({ message: "Permission denied to change level" });
+    if (level !== undefined && req.user.role !== "admin") {
+      return res
+        .status(403)
+        .json({ message: "Permission denied to change level" });
+    }
+
+    if (level !== undefined && !Number.isFinite(Number(level))) {
+      return res.status(400).json({ message: "Level must be a number" });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -87,6 +94,7 @@ exports.updateUserProfile = async (req, res) => {
       const salt = await bcrypt.genSalt(10);
       user.password = await bcrypt.hash(password, salt);
     }
+    if (level !== undefined) user.level = Number(level);
     if (department !== undefined) user.department = department;
     if (position !== undefined) user.position = position;
     if (flow !== undefined) user.flow = flow;
