@@ -17,13 +17,13 @@ const roundUp = (num) => {
 router.post("/", quotationController.createQuotation);
 
 // ✅ ดึงใบเสนอราคาทั้งหมด พร้อม query year + email → ให้ controller จัดการ filter
-router.get("/", quotationController.getQuotations);
+router.get("/", authMiddleware, quotationController.getQuotations);
 
 // ✅ สรุปยอด total/pending/approved ในคำขอเดียว (ใช้ controller)
-router.get("/summary", quotationController.getQuotationsSummary);
+router.get("/summary", authMiddleware, quotationController.getQuotationsSummary);
 
 // ✅ ดึงใบเสนอราคาแบบแบ่งหน้า ต้องอยู่ก่อน "/:id"
-router.get("/paginated", quotationController.getQuotationsWithPagination);
+router.get("/paginated", authMiddleware, quotationController.getQuotationsWithPagination);
 
 // ✅ อัปเดต department อัตโนมัติ (เฉพาะ admin)
 router.patch(
@@ -258,25 +258,7 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 });
 
 // ค้นหาใบเสนอราคา
-router.get("/search", async (req, res) => {
-  const { title, status } = req.query;
-  try {
-    const query = {};
-
-    if (title) {
-      query.title = { $regex: title, $options: "i" };
-    }
-
-    if (status) {
-      query.approvalStatus = status;
-    }
-
-    const quotations = await Quotation.find(query);
-    res.status(200).json(quotations);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+router.get("/search", authMiddleware, quotationController.searchQuotations);
 
 // ดึง qt by email สำหรับแสดงหน้าจอเร็ว ๆ (แค่ 10–20 รายการแรก)
 router.get(
@@ -294,6 +276,7 @@ router.get(
 // 🔹 เพิ่ม API ดึงใบ Quotation ที่ต้อง Approve ตาม Email
 router.get(
   "/approval-by-email/:email",
+  authMiddleware,
   quotationController.getApprovalQuotationsByEmail,
 );
 // เปลี่ยนสถานะอนุมัติ (Approve/Reject)
@@ -391,36 +374,9 @@ router.post(
 // ✅ อัปเดต Flow ของใบเสนอราคาเดิมให้เป็น Flow ปัจจุบัน
 router.patch(
   "/:id/update-approval-flow",
+  authMiddleware,
   quotationController.updateApprovalFlow,
 );
 // ✅ ดึงใบเสนอราคาเดี่ยว พร้อม field department
-router.get("/:id", async (req, res) => {
-  try {
-    const quotation = await Quotation.findById(req.params.id)
-      .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages customerApproval customerSignature customerESignHistory",
-      )
-
-      .populate({
-        path: "approvalHierarchy",
-        select: "quotationId approvalHierarchy",
-        populate: {
-          path: "approvalHierarchy",
-          select: "level approver status",
-        },
-      })
-      .populate(
-        "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName email authorizedApprovers",
-      ); // ✅ เพิ่มการ populate clientId
-
-    if (!quotation) {
-      return res.status(404).json({ message: "Quotation not found" });
-    }
-
-    res.status(200).json(quotation);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+router.get("/:id", authMiddleware, quotationController.getQuotationById);
 module.exports = router;
