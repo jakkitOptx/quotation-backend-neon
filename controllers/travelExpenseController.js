@@ -1,28 +1,65 @@
 const TravelExpense = require("../models/TravelExpense");
 const Quotation = require("../models/Quotation");
 const User = require("../models/User");
+const ApproveFlow = require("../models/ApproveFlow");
 const Log = require("../models/Log");
 const { getDrivingDistance } = require("../services/googleRoutesService");
 const { uploadBufferToS3 } = require("../utils/s3Client");
 
-const buildApprovalLevels = (requesterLevel) => {
-  const normalizedLevel = Number(requesterLevel) || 1;
+const MAX_TRAVEL_APPROVAL_LEVEL = 5;
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
-  if (normalizedLevel <= 2) {
-    return [3, 4];
-  }
-
-  return [4];
+const createApprovalFlowError = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 };
 
-const createApprovalSteps = (requesterLevel) =>
-  buildApprovalLevels(requesterLevel).map((level) => ({
-    level,
-    status: "Pending",
-    actedBy: "",
-    actedAt: null,
-    rejectedReason: "",
-  }));
+const buildApprovalStepsFromFlow = async (flowOwner, requesterLevel) => {
+  const normalizedLevel = Number(requesterLevel) || 1;
+
+  if (normalizedLevel >= MAX_TRAVEL_APPROVAL_LEVEL) {
+    throw createApprovalFlowError(
+      "Level 5 or higher users cannot create travel expense requests",
+      403
+    );
+  }
+
+  if (!flowOwner?.flow) {
+    throw createApprovalFlowError("Approval flow is not configured for this user");
+  }
+
+  const flow = await ApproveFlow.findById(flowOwner.flow).lean();
+  if (!flow) {
+    throw createApprovalFlowError("Approval flow not found", 404);
+  }
+
+  const approvalSteps = (flow.approvalHierarchy || [])
+    .map((step) => ({
+      level: Number(step.level),
+      approver: normalizeEmail(step.approver),
+      status: "Pending",
+      actedBy: "",
+      actedAt: null,
+      rejectedReason: "",
+    }))
+    .filter(
+      (step) =>
+        Number.isFinite(step.level) &&
+        step.level > normalizedLevel &&
+        step.level <= MAX_TRAVEL_APPROVAL_LEVEL &&
+        step.approver
+    )
+    .sort((a, b) => a.level - b.level);
+
+  if (approvalSteps.length === 0) {
+    throw createApprovalFlowError(
+      "No eligible travel expense approvers found in the user's approval flow"
+    );
+  }
+
+  return { flowId: flow._id, approvalSteps };
+};
 
 const getCurrentApprovalStep = (doc) => {
   if (!Array.isArray(doc?.approvalSteps) || doc.approvalSteps.length === 0) {
@@ -35,6 +72,7 @@ const getCurrentApprovalStep = (doc) => {
 const syncCurrentApprovalLevel = (doc) => {
   const currentStep = getCurrentApprovalStep(doc);
   doc.currentApprovalLevel = currentStep ? Number(currentStep.level) : null;
+  doc.currentApprover = currentStep?.approver || "";
   return currentStep;
 };
 
@@ -43,24 +81,39 @@ const ensureApprovalFlow = async (doc) => {
 
   let hasChanges = false;
 
+  let requester = null;
+
   if (!doc.requestedByLevel) {
-    const requester = await User.findOne({ username: doc.requestedBy })
-      .select("level")
-      .lean();
+    requester = await User.findOne({ username: doc.requestedBy });
 
     doc.requestedByLevel = Number(requester?.level) || 1;
     hasChanges = true;
   }
 
   if (!Array.isArray(doc.approvalSteps) || doc.approvalSteps.length === 0) {
-    doc.approvalSteps = createApprovalSteps(doc.requestedByLevel);
+    requester = requester || (await User.findOne({ username: doc.requestedBy }));
+    if (!requester) {
+      throw createApprovalFlowError("Travel expense requester not found", 404);
+    }
+
+    const { flowId, approvalSteps } = await buildApprovalStepsFromFlow(
+      requester,
+      doc.requestedByLevel
+    );
+    doc.approvalFlowId = flowId;
+    doc.approvalSteps = approvalSteps;
     hasChanges = true;
   }
 
   const currentStep = getCurrentApprovalStep(doc);
   const nextLevel = currentStep ? Number(currentStep.level) : null;
+  const nextApprover = currentStep?.approver || "";
   if (doc.currentApprovalLevel !== nextLevel) {
     doc.currentApprovalLevel = nextLevel;
+    hasChanges = true;
+  }
+  if (doc.currentApprover !== nextApprover) {
+    doc.currentApprover = nextApprover;
     hasChanges = true;
   }
 
@@ -71,13 +124,19 @@ const ensureApprovalFlow = async (doc) => {
   return doc;
 };
 
-const resetTravelExpenseApprovalFlow = (doc) => {
+const resetTravelExpenseApprovalFlow = async (doc, flowOwner, requesterLevel) => {
+  const { flowId, approvalSteps } = await buildApprovalStepsFromFlow(
+    flowOwner,
+    requesterLevel
+  );
+
   doc.status = "Pending";
   doc.approvedBy = "";
   doc.approvedAt = null;
   doc.rejectedReason = "";
-  doc.approvalSteps = createApprovalSteps(doc.requestedByLevel);
-  doc.currentApprovalLevel = buildApprovalLevels(doc.requestedByLevel)[0] || null;
+  doc.approvalFlowId = flowId;
+  doc.approvalSteps = approvalSteps;
+  syncCurrentApprovalLevel(doc);
 };
 
 const isSameApprovalScope = (user, doc) => {
@@ -88,6 +147,28 @@ const isSameApprovalScope = (user, doc) => {
   return !!user?.department && user.department === doc.department;
 };
 
+const isAssignedTravelExpenseApprover = (user, doc) =>
+  (doc?.approvalSteps || []).some(
+    (step) =>
+      step.approver &&
+      normalizeEmail(step.approver) === normalizeEmail(user?.username)
+  );
+
+const isSameDepartment = (user, doc) =>
+  Boolean(user?.department) &&
+  normalizeEmail(user.department) === normalizeEmail(doc?.department);
+
+const canViewTravelExpenseApproval = (user, doc) => {
+  if (!user || !doc) return false;
+  if (user.role === "admin") return true;
+  if (normalizeEmail(user.username) === normalizeEmail(doc.requestedBy)) {
+    return false;
+  }
+  if (isAssignedTravelExpenseApprover(user, doc)) return true;
+
+  return Number(user.level) === 4 && isSameDepartment(user, doc);
+};
+
 const canApproveTravelExpense = (user, doc) => {
   if (!user || !doc) return false;
 
@@ -96,6 +177,10 @@ const canApproveTravelExpense = (user, doc) => {
 
   const currentStep = syncCurrentApprovalLevel(doc);
   if (!currentStep) return false;
+
+  if (currentStep.approver) {
+    return normalizeEmail(user.username) === normalizeEmail(currentStep.approver);
+  }
 
   return (
     Number(user.level) === Number(currentStep.level) &&
@@ -340,6 +425,9 @@ const canViewTravelExpenseLog = (user, doc) => {
   if (!user || !doc) return false;
   if (user.role === "admin") return true;
   if (user.username === doc.requestedBy) return true;
+  if (isAssignedTravelExpenseApprover(user, doc)) {
+    return true;
+  }
   if (Number(user.level) < 3) return false;
   return isSameApprovalScope(user, doc);
 };
@@ -497,6 +585,11 @@ exports.createTravelExpense = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    const { flowId, approvalSteps } = await buildApprovalStepsFromFlow(
+      user,
+      user.level
+    );
+
     const estimate = await calculateTravelEstimate(origin, destination, {
       avoidTolls,
       avoidHighways,
@@ -545,8 +638,10 @@ exports.createTravelExpense = async (req, res) => {
       teamGroup: user.teamGroup || "",
       receiptUrl: tollReceiptUrls[0] || "",
       tollReceiptUrls,
-      approvalSteps: createApprovalSteps(user.level),
-      currentApprovalLevel: buildApprovalLevels(user.level)[0] || null,
+      approvalFlowId: flowId,
+      approvalSteps,
+      currentApprovalLevel: approvalSteps[0]?.level || null,
+      currentApprover: approvalSteps[0]?.approver || "",
     });
     await createTravelExpenseLog({
       travelExpenseId: doc._id,
@@ -708,7 +803,13 @@ exports.updateTravelExpense = async (req, res) => {
     doc.receiptUrl = tollReceiptUrls[0] || "";
     doc.tollReceiptUrls = tollReceiptUrls;
 
-    resetTravelExpenseApprovalFlow(doc);
+    const requester = await User.findOne({ username: doc.requestedBy });
+    if (!requester) {
+      return res.status(404).json({ message: "Travel expense requester not found" });
+    }
+
+    doc.requestedByLevel = Number(requester.level) || doc.requestedByLevel;
+    await resetTravelExpenseApprovalFlow(doc, requester, doc.requestedByLevel);
 
     await doc.save();
     await createTravelExpenseLog({
@@ -908,7 +1009,7 @@ exports.getTravelExpenseLogsById = async (req, res) => {
     const { id } = req.params;
     const user = req.user;
     const doc = await TravelExpense.findById(id)
-      .select("requestedBy department")
+      .select("requestedBy department approvalSteps")
       .lean();
 
     if (!doc) {
@@ -973,12 +1074,14 @@ exports.approveTravelExpense = async (req, res) => {
 
     if (nextStep) {
       doc.currentApprovalLevel = Number(nextStep.level);
+      doc.currentApprover = nextStep.approver || "";
       doc.approvedBy = "";
       doc.approvedAt = null;
       doc.rejectedReason = "";
     } else {
       doc.status = "Approved";
       doc.currentApprovalLevel = null;
+      doc.currentApprover = "";
       doc.approvedBy = user.username;
       doc.approvedAt = new Date();
       doc.rejectedReason = "";
@@ -1000,7 +1103,7 @@ exports.approveTravelExpense = async (req, res) => {
     });
   } catch (error) {
     console.error("approveTravelExpense error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 
@@ -1046,6 +1149,7 @@ exports.rejectTravelExpense = async (req, res) => {
     doc.approvedAt = new Date();
     doc.rejectedReason = rejectedReason;
     doc.currentApprovalLevel = null;
+    doc.currentApprover = "";
 
     await doc.save();
     await createTravelExpenseLog({
@@ -1063,7 +1167,56 @@ exports.rejectTravelExpense = async (req, res) => {
     });
   } catch (error) {
     console.error("rejectTravelExpense error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(error.statusCode || 500).json({ message: error.message });
+  }
+};
+
+exports.updateTravelExpenseApprovalFlow = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+    const user = req.user;
+
+    if (user?.role !== "admin") {
+      return res.status(403).json({
+        message: "Only admins can update a travel expense approval flow",
+      });
+    }
+
+    const doc = await TravelExpense.findById(id);
+    if (!doc) {
+      return res.status(404).json({ message: "Travel expense not found" });
+    }
+
+    const requester = await User.findOne({ username: doc.requestedBy });
+    const flowOwnerEmail = normalizeEmail(email || doc.requestedBy);
+    const flowOwner = await User.findOne({ username: flowOwnerEmail });
+
+    if (!flowOwner) {
+      return res.status(404).json({ message: "Approval flow owner not found" });
+    }
+
+    const requesterLevel = Number(requester?.level || doc.requestedByLevel) || 1;
+    doc.requestedByLevel = requesterLevel;
+    await resetTravelExpenseApprovalFlow(doc, flowOwner, requesterLevel);
+    await doc.save();
+
+    await createTravelExpenseLog({
+      travelExpenseId: doc._id,
+      performedBy: user.username,
+      action: "update_flow",
+      description: `Updated approval flow from ${flowOwnerEmail}`,
+    });
+
+    return res.status(200).json({
+      message: "Travel expense approval flow updated successfully",
+      data: doc,
+    });
+  } catch (error) {
+    console.error("updateTravelExpenseApprovalFlow error:", error);
+    return res
+      .status(error.statusCode || 500)
+      .json({ message: error.message });
   }
 };
 
@@ -1093,17 +1246,8 @@ exports.getTravelExpenseApprovals = async (req, res) => {
       ];
     }
 
-    if (user.role === "admin") {
-    } else {
+    if (user.role !== "admin") {
       query.requestedBy = { $ne: user.username };
-
-      if (Number(user.level) < 3) {
-        return res.status(403).json({ message: "No approval permission" });
-      }
-
-      if (Number(user.level) !== 4) {
-        query.department = user.department;
-      }
 
       if (isPendingView) {
         query.status = "Pending";
@@ -1113,27 +1257,19 @@ exports.getTravelExpenseApprovals = async (req, res) => {
     const docs = await TravelExpense.find(query).sort({ createdAt: -1 });
     await Promise.all(docs.map((doc) => ensureApprovalFlow(doc)));
 
-    const data =
-      user.role === "admin"
-        ? docs
-        : isPendingView
-          ? docs.filter((doc) => {
-              const currentStep = syncCurrentApprovalLevel(doc);
-
-              return (
-                !!currentStep &&
-                Number(currentStep.level) === Number(user.level) &&
-                isSameApprovalScope(user, doc)
-              );
-            })
-          : docs;
+    const visibleDocs = docs.filter((doc) =>
+      canViewTravelExpenseApproval(user, doc)
+    );
+    const data = visibleDocs.map((doc) => ({
+      ...doc.toObject(),
+      canApprove:
+        doc.status === "Pending" && canApproveTravelExpense(user, doc),
+    }));
 
     return res.status(200).json({ data });
   } catch (error) {
     console.error("getTravelExpenseApprovals error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
-
-
 

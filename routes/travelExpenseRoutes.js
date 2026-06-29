@@ -42,6 +42,11 @@ router.patch(
   authMiddleware,
   travelExpenseController.rejectTravelExpense
 );
+router.patch(
+  "/:id/update-approval-flow",
+  authMiddleware,
+  travelExpenseController.updateTravelExpenseApprovalFlow
+);
 router.delete("/:id", authMiddleware, travelExpenseController.deleteTravelExpense);
 
 module.exports = router;

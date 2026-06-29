@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const TravelExpenseApprovalStepSchema = new mongoose.Schema(
   {
     level: { type: Number, required: true },
+    approver: { type: String, default: "", trim: true },
     status: {
       type: String,
       enum: ["Pending", "Approved", "Rejected"],
@@ -64,13 +65,20 @@ const TravelExpenseSchema = new mongoose.Schema(
     approvedAt: { type: Date, default: null },
     rejectedReason: { type: String, default: "" },
     approvalSteps: { type: [TravelExpenseApprovalStepSchema], default: [] },
+    approvalFlowId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ApproveFlow",
+      default: null,
+    },
     currentApprovalLevel: { type: Number, default: null },
+    currentApprover: { type: String, default: "", trim: true },
   },
   { timestamps: true }
 );
 
 TravelExpenseSchema.index({ quotationType: 1, documentRunNumber: 1 });
 TravelExpenseSchema.index({ documentNo: 1 });
+TravelExpenseSchema.index({ status: 1, currentApprover: 1 });
 
 module.exports =
   mongoose.models.TravelExpense ||
