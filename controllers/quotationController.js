@@ -56,6 +56,49 @@ const formatQuotationNumber = (quotation) => {
   return `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 };
 
+const buildQuotationVisibilityQuery = (user = {}) => {
+  if (user.role === "admin") return {};
+
+  const level = Number(user.level || 0);
+
+  if (level >= 3) {
+    return { department: user.department || "" };
+  }
+
+  if (level === 2) {
+    return { teamGroup: user.teamGroup || "" };
+  }
+
+  return { createdByUser: user.username || "" };
+};
+
+const buildYearQuery = (year) => {
+  const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
+  const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
+  const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
+
+  return {
+    documentDate: { $gte: start, $lt: end },
+  };
+};
+
+const canViewQuotation = (user, quotation) => {
+  if (!user || !quotation) return false;
+  if (user.role === "admin") return true;
+
+  const level = Number(user.level || 0);
+
+  if (level >= 3) {
+    return String(quotation.department || "") === String(user.department || "");
+  }
+
+  if (level === 2) {
+    return String(quotation.teamGroup || "") === String(user.teamGroup || "");
+  }
+
+  return String(quotation.createdByUser || "") === String(user.username || "");
+};
+
 const getRequestIpAddress = (req) => {
   const forwardedFor = req.headers["x-forwarded-for"];
   if (forwardedFor) {
@@ -325,28 +368,11 @@ exports.createQuotation = async (req, res) => {
 
 exports.getQuotations = async (req, res) => {
   try {
-    const { year, email } = req.query;
-    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
-    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
-
+    const { year } = req.query;
     const query = {
-      documentDate: { $gte: start, $lt: end },
+      ...buildYearQuery(year),
+      ...buildQuotationVisibilityQuery(req.user),
     };
-
-    if (email) {
-      const user = await User.findOne({ username: email });
-      console.log("user.teamGroup getQuotations==>", user.teamGroup);
-      if (user.role !== "admin") {
-        if (user.level >= 3) {
-          query.department = user.department;
-        } else if (user.level === 2) {
-          query.teamGroup = user.teamGroup;
-        } else {
-          query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
-        }
-      }
-    }
 
     const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
@@ -395,27 +421,10 @@ exports.getQuotationsByEmailPaginated = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
-    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
-    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
-
     const query = {
-      documentDate: { $gte: start, $lt: end },
+      ...buildYearQuery(year),
+      ...buildQuotationVisibilityQuery(user),
     };
-
-    // ✅ Debug ได้ตามต้องการ
-    console.log("user.teamGroup getQuotationsByEmailPaginated ==>", user.teamGroup);
-
-    // ✅ Admin เห็นทั้งหมดของปีนั้น
-    if (user.role !== "admin") {
-      if (user.level >= 3) {
-        query.department = user.department;
-      } else if (user.level === 2) {
-        query.teamGroup = user.teamGroup;
-      } else {
-        query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
-      }
-    }
 
     const total = await Quotation.countDocuments(query);
 
@@ -473,24 +482,10 @@ exports.getQuotationsByEmail = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
-    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
-    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
-
     const query = {
-      documentDate: { $gte: start, $lt: end },
+      ...buildYearQuery(year),
+      ...buildQuotationVisibilityQuery(user),
     };
-
-    // ✅ role filter ตาม user ที่ login จริง
-    if (user.role !== "admin") {
-      if (user.level >= 3) {
-        query.department = user.department;
-      } else if (user.level === 2) {
-        query.teamGroup = user.teamGroup;
-      } else {
-        query.createdByUser = user.username;
-      }
-    }
 
     const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
@@ -525,33 +520,12 @@ exports.getQuotationsWithPagination = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const { year, email } = req.query;
-
-    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
-    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
+    const { year } = req.query;
 
     const query = {
-      documentDate: { $gte: start, $lt: end },
+      ...buildYearQuery(year),
+      ...buildQuotationVisibilityQuery(req.user),
     };
-
-    if (email) {
-      const user = await User.findOne({ username: email });
-      console.log(
-        "user.teamGroup getQuotationsWithPagination ==>",
-        user.teamGroup
-      );
-
-      if (user.role !== "admin") {
-        if (user.level >= 3) {
-          query.department = user.department;
-        } else if (user.level === 2) {
-          query.teamGroup = user.teamGroup;
-        } else {
-          query.createdByUser = user.username; // lv.1 ดูเฉพาะของตัวเอง
-        }
-      }
-    }
 
     const [quotations, total] = await Promise.all([
       Quotation.find(query)
@@ -593,6 +567,15 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
   try {
     if (!email) {
       return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (user.role !== "admin" && user.username !== email) {
+      return res.status(403).json({ message: "Forbidden" });
     }
 
     const selectedYear = year ? parseInt(year) : new Date().getFullYear();
@@ -666,6 +649,66 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
 };
 
 // ✅ อัปเดตเหตุผลของใบ Quotation
+exports.searchQuotations = async (req, res) => {
+  const { title, status, year } = req.query;
+
+  try {
+    const query = {
+      ...buildQuotationVisibilityQuery(req.user),
+    };
+
+    if (year) {
+      Object.assign(query, buildYearQuery(year));
+    }
+
+    if (title) {
+      query.title = { $regex: title, $options: "i" };
+    }
+
+    if (status) {
+      query.approvalStatus = status;
+    }
+
+    const quotations = await Quotation.find(query).sort({ createdAt: -1 });
+    res.status(200).json(quotations);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getQuotationById = async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id)
+      .select(
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department team teamGroup amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus cancelDate reason canceledBy remark CreditTerm isDetailedForm isSpecialForm numberOfSpecialPages customerApproval customerSignature customerESignHistory",
+      )
+      .populate({
+        path: "approvalHierarchy",
+        select: "quotationId approvalHierarchy",
+        populate: {
+          path: "approvalHierarchy",
+          select: "level approver status",
+        },
+      })
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName email authorizedApprovers",
+      );
+
+    if (!quotation) {
+      return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    if (!canViewQuotation(req.user, quotation)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    res.status(200).json(quotation);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.updateQuotationReason = async (req, res) => {
   const { reason } = req.body;
 
@@ -971,6 +1014,7 @@ exports.getQuotationsSummary = async (req, res) => {
 
     const match = {
       documentDate: { $gte: yearStart, $lt: yearEnd },
+      ...buildQuotationVisibilityQuery(req.user),
     };
 
     const [summary] = await Quotation.aggregate([
@@ -1005,6 +1049,10 @@ exports.updateApprovalFlow = async (req, res) => {
   try {
     const { id } = req.params; // quotationId
     const { email } = req.body; // user ที่จะใช้ flow ของเขา
+
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ message: "Admin only" });
+    }
 
     const quotation = await Quotation.findById(id);
     if (!quotation)
