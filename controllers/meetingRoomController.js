@@ -8,6 +8,36 @@ const timeToMin = (t) => {
   return h * 60 + m;
 };
 
+const isDateKey = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || "");
+
+const buildBookingDateFilter = ({ dateKey, startDate, endDate }) => {
+  if (dateKey) {
+    if (!isDateKey(dateKey)) {
+      return { error: "dateKey must be YYYY-MM-DD" };
+    }
+
+    return { dateFilter: { dateKey } };
+  }
+
+  if (!startDate || !endDate) {
+    return { error: "dateKey or startDate and endDate are required" };
+  }
+
+  if (!isDateKey(startDate) || !isDateKey(endDate)) {
+    return { error: "startDate and endDate must be YYYY-MM-DD" };
+  }
+
+  if (startDate > endDate) {
+    return { error: "startDate must be less than or equal to endDate" };
+  }
+
+  return {
+    dateFilter: {
+      dateKey: { $gte: startDate, $lte: endDate },
+    },
+  };
+};
+
 const defaultRooms = [
   {
     code: "R1",
@@ -96,16 +126,24 @@ exports.getRooms = async (req, res) => {
 // ------------------------
 exports.getBookings = async (req, res) => {
   try {
-    const { roomId, dateKey } = req.query;
+    const { roomId, dateKey, startDate, endDate } = req.query;
 
-    if (!roomId || !dateKey) {
-      return res
-        .status(400)
-        .json({ message: "roomId and dateKey are required" });
+    if (!roomId) {
+      return res.status(400).json({ message: "roomId is required" });
     }
 
-    const bookings = await MeetingRoomBooking.find({ roomId, dateKey })
-      .sort({ startMin: 1 })
+    const { dateFilter, error } = buildBookingDateFilter({
+      dateKey,
+      startDate,
+      endDate,
+    });
+
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    const bookings = await MeetingRoomBooking.find({ roomId, ...dateFilter })
+      .sort({ dateKey: 1, startMin: 1 })
       .lean();
 
     res.json(bookings);
@@ -312,12 +350,20 @@ exports.updateBooking = async (req, res) => {
 
 exports.getMyBookings = async (req, res) => {
   try {
-    const { roomId, dateKey } = req.query;
+    const { roomId, dateKey, startDate, endDate } = req.query;
 
-    if (!roomId || !dateKey) {
-      return res
-        .status(400)
-        .json({ message: "roomId and dateKey are required" });
+    if (!roomId) {
+      return res.status(400).json({ message: "roomId is required" });
+    }
+
+    const { dateFilter, error } = buildBookingDateFilter({
+      dateKey,
+      startDate,
+      endDate,
+    });
+
+    if (error) {
+      return res.status(400).json({ message: error });
     }
 
     // ✅ filter เฉพาะของตัวเอง (ใช้ username/email ที่เชื่อถือได้ที่สุด)
@@ -331,10 +377,10 @@ exports.getMyBookings = async (req, res) => {
 
     const bookings = await MeetingRoomBooking.find({
       roomId,
-      dateKey,
+      ...dateFilter,
       $or: or,
     })
-      .sort({ startMin: 1 })
+      .sort({ dateKey: 1, startMin: 1 })
       .lean();
 
     res.json(bookings);
