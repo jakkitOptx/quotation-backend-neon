@@ -127,9 +127,11 @@ exports.updateApprovalStatus = async (req, res) => {
 
 // ✅ อัปเดต Approver ใน Level หรืออัปเดต Status โดยใช้ Level และ Email
 exports.updateApproverInLevel = async (req, res) => {
-  const { level, approver, status } = req.body;
+  const { level, approver, status, reason } = req.body;
+  const isAdminOverrideCancel =
+    req.user?.role === "admin" && status === "Canceled";
 
-  if (!level || !approver || !status) {
+  if (!status || (!isAdminOverrideCancel && (!level || !approver))) {
     return res.status(400).json({
       message: "Level, approver, and status are required",
     });
@@ -143,6 +145,48 @@ exports.updateApproverInLevel = async (req, res) => {
     const quotation = await Quotation.findById(approval.quotationId);
     if (!quotation)
       return res.status(404).json({ message: "Quotation not found" });
+
+    const adminEmail = String(req.user?.username || req.user?.email || "")
+      .trim()
+      .toLowerCase();
+
+    if (isAdminOverrideCancel) {
+      if (["Approved", "Canceled"].includes(quotation.approvalStatus)) {
+        return res.status(400).json({
+          message: "Only pending or rejected quotations can be canceled",
+        });
+      }
+
+      const companyPrefix = adminEmail.includes("@optx")
+        ? "OPTX"
+        : adminEmail.includes("@neonworks")
+        ? "NW-QT"
+        : "QT";
+      const docYear = new Date(quotation.documentDate).getFullYear();
+      const runFormatted = quotation.runNumber?.padStart(3, "0") || "???";
+      const qtNumber = `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
+      const now = new Date();
+
+      quotation.approvalStatus = "Canceled";
+      quotation.cancelDate = now;
+      quotation.canceledBy = adminEmail;
+      quotation.reason = reason || quotation.reason || "Admin override cancel";
+
+      await quotation.save();
+
+      await Log.create({
+        quotationId: quotation._id,
+        action: "admin_override_cancel",
+        performedBy: adminEmail,
+        description: `Admin override canceled ${qtNumber}`,
+      });
+
+      return res.status(200).json({
+        message: "Quotation canceled by admin override",
+        approval,
+        quotation,
+      });
+    }
 
     const requesterEmail = String(req.user?.username || req.user?.email || "")
       .trim()
@@ -183,7 +227,7 @@ exports.updateApproverInLevel = async (req, res) => {
     hierarchy.status = status;
     hierarchy.approvedAt = new Date();
 
-const companyPrefix = approver.includes("@optx")
+    const companyPrefix = approver.includes("@optx")
       ? "OPTX"
       : approver.includes("@neonworks")
       ? "NW-QT"
