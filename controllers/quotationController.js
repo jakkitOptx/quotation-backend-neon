@@ -56,10 +56,22 @@ const formatQuotationNumber = (quotation) => {
   return `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 };
 
+const isManagementExecutive = (user = {}) =>
+  Number(user.level || 0) >= 5 &&
+  String(user.department || "").trim().toLowerCase() === "management";
+
+const isClientServiceAccountPlanner = (value = "") =>
+  String(value || "").trim().toLowerCase() ===
+  "client service / account planner";
+
 const buildQuotationVisibilityQuery = (user = {}) => {
-  if (user.role === "admin") return {};
+  if (user.role === "admin" || isManagementExecutive(user)) return {};
 
   const level = Number(user.level || 0);
+
+  if (level === 3 && isClientServiceAccountPlanner(user.department)) {
+    return { teamGroup: user.teamGroup || "" };
+  }
 
   if (level >= 3) {
     return { department: user.department || "" };
@@ -84,9 +96,13 @@ const buildYearQuery = (year) => {
 
 const canViewQuotation = (user, quotation) => {
   if (!user || !quotation) return false;
-  if (user.role === "admin") return true;
+  if (user.role === "admin" || isManagementExecutive(user)) return true;
 
   const level = Number(user.level || 0);
+
+  if (level === 3 && isClientServiceAccountPlanner(user.department)) {
+    return String(quotation.teamGroup || "") === String(user.teamGroup || "");
+  }
 
   if (level >= 3) {
     return String(quotation.department || "") === String(user.department || "");
@@ -1049,6 +1065,10 @@ exports.updateApprovalFlow = async (req, res) => {
   try {
     const { id } = req.params; // quotationId
     const { email } = req.body; // user ที่จะใช้ flow ของเขา
+
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ message: "Admin only" });
+    }
 
     if (req.user?.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });

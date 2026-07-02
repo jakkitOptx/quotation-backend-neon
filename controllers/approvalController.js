@@ -144,15 +144,46 @@ exports.updateApproverInLevel = async (req, res) => {
     if (!quotation)
       return res.status(404).json({ message: "Quotation not found" });
 
-    const hierarchy = approval.approvalHierarchy.find(
-      (item) => item.level === level && item.approver === approver
-    );
-    if (hierarchy) {
-      hierarchy.status = status;
-      hierarchy.approvedAt = new Date();
+    const requesterEmail = String(req.user?.username || req.user?.email || "")
+      .trim()
+      .toLowerCase();
+    const requestedApprover = String(approver || "").trim().toLowerCase();
+
+    if (!requesterEmail || requesterEmail !== requestedApprover) {
+      return res.status(403).json({
+        message: "Permission denied: requester must match approver",
+      });
     }
 
-    const companyPrefix = approver.includes("@optx")
+    const hierarchyIndex = approval.approvalHierarchy.findIndex(
+      (item) =>
+        Number(item.level) === Number(level) &&
+        String(item.approver || "").trim().toLowerCase() === requestedApprover
+    );
+
+    if (hierarchyIndex === -1) {
+      return res.status(404).json({ message: "Approver level not found" });
+    }
+
+    const isReadyToApprove = approval.approvalHierarchy
+      .slice(0, hierarchyIndex)
+      .every((item) => item.status === "Approved");
+
+    if (!isReadyToApprove) {
+      return res.status(403).json({
+        message: "Permission denied: previous approval levels are pending",
+      });
+    }
+
+    const hierarchy = approval.approvalHierarchy[hierarchyIndex];
+    if (hierarchy.status !== "Pending") {
+      return res.status(400).json({ message: "Approval step is not pending" });
+    }
+
+    hierarchy.status = status;
+    hierarchy.approvedAt = new Date();
+
+const companyPrefix = approver.includes("@optx")
       ? "OPTX"
       : approver.includes("@neonworks")
       ? "NW-QT"
