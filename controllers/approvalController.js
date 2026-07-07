@@ -4,6 +4,7 @@ const Quotation = require("../models/Quotation");
 const User = require("../models/User");
 const Log = require("../models/Log");
 const Notification = require("../models/Notification");
+const { canApproveAcrossDepartments } = require("../utils/quotationAccess");
 
 // ✅ สร้าง Approval Hierarchy
 exports.createApprovalHierarchy = async (req, res) => {
@@ -193,17 +194,35 @@ exports.updateApproverInLevel = async (req, res) => {
       .toLowerCase();
     const requestedApprover = String(approver || "").trim().toLowerCase();
 
-    if (!requesterEmail || requesterEmail !== requestedApprover) {
+    const canDelegateSosparkolsApproval =
+      status === "Approved" &&
+      canApproveAcrossDepartments(req.user, quotation) &&
+      Number(level || 0) <= Number(req.user?.level || 0);
+
+    if (
+      !requesterEmail ||
+      (requesterEmail !== requestedApprover && !canDelegateSosparkolsApproval)
+    ) {
       return res.status(403).json({
         message: "Permission denied: requester must match approver",
       });
     }
 
-    const hierarchyIndex = approval.approvalHierarchy.findIndex(
-      (item) =>
-        Number(item.level) === Number(level) &&
-        String(item.approver || "").trim().toLowerCase() === requestedApprover
-    );
+    const hierarchyIndex = approval.approvalHierarchy.findIndex((item) => {
+      if (Number(item.level) !== Number(level)) return false;
+
+      const itemApprover = String(item.approver || "").trim().toLowerCase();
+      if (itemApprover === requestedApprover) {
+        return true;
+      }
+
+      if (!canDelegateSosparkolsApproval) {
+        return itemApprover === requestedApprover;
+      }
+
+      if (item.status !== "Pending") return false;
+      return requestedApprover === requesterEmail;
+    });
 
     if (hierarchyIndex === -1) {
       return res.status(404).json({ message: "Approver level not found" });
@@ -227,9 +246,11 @@ exports.updateApproverInLevel = async (req, res) => {
     hierarchy.status = status;
     hierarchy.approvedAt = new Date();
 
-    const companyPrefix = approver.includes("@optx")
+    const actionBy = requesterEmail || requestedApprover || approver;
+
+    const companyPrefix = actionBy.includes("@optx")
       ? "OPTX"
-      : approver.includes("@neonworks")
+      : actionBy.includes("@neonworks")
       ? "NW-QT"
       : "QT";
 
@@ -267,19 +288,19 @@ exports.updateApproverInLevel = async (req, res) => {
     if (status === "Canceled" && level >= 2) {
       quotation.approvalStatus = "Canceled";
       quotation.cancelDate = now;
-      quotation.canceledBy = approver;
+      quotation.canceledBy = actionBy;
 
       await Log.create({
         quotationId: quotation._id,
         action: "cancel",
-        performedBy: approver,
+        performedBy: actionBy,
         description: `Canceled ${qtNumber}`,
       });
 
       await Notification.create({
         user: quotation.createdByUser,
-        message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`,
-        createdBy: approver,
+        message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${actionBy}`,
+        createdBy: actionBy,
         type: "approval",
         createdAt: now,
       });
@@ -287,7 +308,7 @@ exports.updateApproverInLevel = async (req, res) => {
       await sendSocketNotification(
         quotation.createdByUser,
         "❌ ใบเสนอราคาถูกยกเลิก",
-        `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${approver}`
+        `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${actionBy}`
       );
 
       // ✅ REJECTED
@@ -297,14 +318,14 @@ exports.updateApproverInLevel = async (req, res) => {
       await Log.create({
         quotationId: quotation._id,
         action: "reject",
-        performedBy: approver,
-        description: `${qtNumber} rejected by ${approver}`,
+        performedBy: actionBy,
+        description: `${qtNumber} rejected by ${actionBy}`,
       });
 
       await Notification.create({
         user: quotation.createdByUser,
-        message: `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`,
-        createdBy: approver,
+        message: `เอกสาร ${qtNumber} ถูก Reject โดย ${actionBy}`,
+        createdBy: actionBy,
         type: "approval",
         createdAt: now,
       });
@@ -312,7 +333,7 @@ exports.updateApproverInLevel = async (req, res) => {
       await sendSocketNotification(
         quotation.createdByUser,
         "🚫 ใบเสนอราคาถูก Reject",
-        `เอกสาร ${qtNumber} ถูก Reject โดย ${approver}`
+        `เอกสาร ${qtNumber} ถูก Reject โดย ${actionBy}`
       );
 
       // ✅ APPROVED
@@ -328,14 +349,14 @@ exports.updateApproverInLevel = async (req, res) => {
         await Log.create({
           quotationId: quotation._id,
           action: "approve",
-          performedBy: approver,
+          performedBy: actionBy,
           description: `${qtNumber} is fully approved.`,
         });
 
         await Notification.create({
           user: quotation.createdByUser,
           message: `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ ✅`,
-          createdBy: approver,
+          createdBy: actionBy,
           type: "approval",
           createdAt: now,
         });
@@ -351,8 +372,8 @@ exports.updateApproverInLevel = async (req, res) => {
         await Log.create({
           quotationId: quotation._id,
           action: "approve",
-          performedBy: approver,
-          description: `${qtNumber} approved by ${approver}`,
+          performedBy: actionBy,
+          description: `${qtNumber} approved by ${actionBy}`,
         });
 
         // แจ้งผู้อนุมัติลำดับถัดไป
@@ -363,7 +384,7 @@ exports.updateApproverInLevel = async (req, res) => {
           await Notification.create({
             user: nextLevel.approver,
             message: `เอกสาร ${qtNumber} รอการอนุมัติจากคุณ`,
-            createdBy: approver,
+            createdBy: actionBy,
             type: "approval",
             createdAt: now,
           });
@@ -378,8 +399,8 @@ exports.updateApproverInLevel = async (req, res) => {
         // แจ้งผู้สร้างเอกสาร
         await Notification.create({
           user: quotation.createdByUser,
-          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`,
-          createdBy: approver,
+          message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${actionBy}`,
+          createdBy: actionBy,
           type: "approval",
           createdAt: now,
         });
@@ -387,7 +408,7 @@ exports.updateApproverInLevel = async (req, res) => {
         await sendSocketNotification(
           quotation.createdByUser,
           "✅ ใบเสนอราคาของคุณได้รับการอนุมัติแล้ว",
-          `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${approver}`
+          `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${actionBy}`
         );
       }
     }
@@ -396,7 +417,7 @@ exports.updateApproverInLevel = async (req, res) => {
     await quotation.save();
 
     res.status(200).json({
-      message: `Approval status updated to ${status} for ${approver} at level ${level}`,
+      message: `Approval status updated to ${status} by ${actionBy} at level ${level}`,
       approval,
     });
   } catch (error) {
