@@ -13,6 +13,11 @@ const {
   s3,
   extractS3KeyFromUrl,
 } = require("../utils/s3Client");
+const {
+  buildQuotationVisibilityQuery,
+  canApproveAcrossDepartments,
+  canViewQuotation,
+} = require("../utils/quotationAccess");
 
 // ✅ ฟังก์ชันปัดเศษแบบพิเศษ (ปัดขึ้นหากทศนิยมหลักที่ 3 >= 5)
 const roundUp = (num) => {
@@ -56,34 +61,6 @@ const formatQuotationNumber = (quotation) => {
   return `${companyPrefix}(${quotation.type})-${docYear}-${runFormatted}`;
 };
 
-const isManagementExecutive = (user = {}) =>
-  Number(user.level || 0) >= 5 &&
-  String(user.department || "").trim().toLowerCase() === "management";
-
-const isClientServiceAccountPlanner = (value = "") =>
-  String(value || "").trim().toLowerCase() ===
-  "client service / account planner";
-
-const buildQuotationVisibilityQuery = (user = {}) => {
-  if (user.role === "admin" || isManagementExecutive(user)) return {};
-
-  const level = Number(user.level || 0);
-
-  if (level === 3 && isClientServiceAccountPlanner(user.department)) {
-    return { teamGroup: user.teamGroup || "" };
-  }
-
-  if (level >= 3) {
-    return { department: user.department || "" };
-  }
-
-  if (level === 2) {
-    return { teamGroup: user.teamGroup || "" };
-  }
-
-  return { createdByUser: user.username || "" };
-};
-
 const buildYearQuery = (year) => {
   const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
   const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
@@ -92,27 +69,6 @@ const buildYearQuery = (year) => {
   return {
     documentDate: { $gte: start, $lt: end },
   };
-};
-
-const canViewQuotation = (user, quotation) => {
-  if (!user || !quotation) return false;
-  if (user.role === "admin" || isManagementExecutive(user)) return true;
-
-  const level = Number(user.level || 0);
-
-  if (level === 3 && isClientServiceAccountPlanner(user.department)) {
-    return String(quotation.teamGroup || "") === String(user.teamGroup || "");
-  }
-
-  if (level >= 3) {
-    return String(quotation.department || "") === String(user.department || "");
-  }
-
-  if (level === 2) {
-    return String(quotation.teamGroup || "") === String(user.teamGroup || "");
-  }
-
-  return String(quotation.createdByUser || "") === String(user.username || "");
 };
 
 const getRequestIpAddress = (req) => {
@@ -604,7 +560,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus reason remark CreditTerm approvalHierarchy"
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department team teamGroup amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus reason remark CreditTerm approvalHierarchy"
       )
       .populate(
         "clientId",
@@ -630,17 +586,26 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
 
       const hierarchy = qt.approvalHierarchy[0]?.approvalHierarchy || [];
 
-      const approverIndex = hierarchy.findIndex(
-        (level) => level.approver === email
-      );
+      const normalizedEmail = String(email || "").trim().toLowerCase();
+      const approverIndex = hierarchy.findIndex((level, index) => {
+        const isReadyToApprove = hierarchy
+          .slice(0, index)
+          .every((previousLevel) => previousLevel.status === "Approved");
+        if (level.status !== "Pending" || !isReadyToApprove) return false;
+
+        const isRequesterStep =
+          String(level.approver || "").trim().toLowerCase() === normalizedEmail;
+        if (isRequesterStep) return true;
+
+        return (
+          canApproveAcrossDepartments(user, qt) &&
+          Number(level.level || 0) <= Number(user.level || 0)
+        );
+      });
 
       if (approverIndex === -1) return false; // ไม่มีอีเมลนี้ใน flow
 
-      const isReadyToApprove = hierarchy
-        .slice(0, approverIndex)
-        .every((level) => level.status === "Approved");
-
-      return hierarchy[approverIndex].status === "Pending" && isReadyToApprove;
+      return true;
     });
 
     // ✅ ปัดเศษค่าตัวเลขก่อนส่งออก
