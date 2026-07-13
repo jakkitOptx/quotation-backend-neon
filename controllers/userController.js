@@ -2,12 +2,31 @@
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
 
+const USER_PROFILE_FIELDS = new Set(["firstName", "lastName", "nickname"]);
+const ADMIN_PROFILE_FIELDS = new Set([
+  "firstName",
+  "lastName",
+  "nickname",
+  "username",
+  "password",
+  "level",
+  "department",
+  "position",
+  "flow",
+  "role",
+  "team",
+  "teamGroup",
+  "teamRole",
+]);
+const USER_SELECT_FIELDS =
+  "firstName lastName nickname username level company department position flow role team teamGroup teamRole";
+
 // ✅ ดึงรายชื่อผู้ใช้ทั้งหมด
 exports.getAllUsers = async (req, res) => {
   try {
     const users = await User.find(
       {},
-      "firstName lastName username level company department position flow role team teamGroup teamRole"
+      USER_SELECT_FIELDS
     );
 
     const usersWithCompany = users.map((user) => {
@@ -32,7 +51,7 @@ exports.getUserById = async (req, res) => {
   try {
     const user = await User.findById(
       req.params.id,
-      "firstName lastName username level company department position flow role team teamGroup teamRole"
+      USER_SELECT_FIELDS
     );
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -55,6 +74,7 @@ exports.updateUserProfile = async (req, res) => {
     const {
       firstName,
       lastName,
+      nickname,
       username,
       password,
       level,
@@ -72,10 +92,24 @@ exports.updateUserProfile = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    if (level !== undefined && req.user.role !== "admin") {
+    const isAdmin = req.user.role === "admin";
+    const isOwner = String(req.user._id) === String(id);
+    const allowedFields = isAdmin ? ADMIN_PROFILE_FIELDS : USER_PROFILE_FIELDS;
+    const forbiddenFields = Object.keys(req.body).filter(
+      (field) => !allowedFields.has(field)
+    );
+
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ message: "Permission denied" });
+    }
+
+    if (forbiddenFields.length > 0) {
       return res
         .status(403)
-        .json({ message: "Permission denied to change level" });
+        .json({
+          message: "Permission denied to update restricted fields",
+          fields: forbiddenFields,
+        });
     }
 
     if (level !== undefined && !Number.isFinite(Number(level))) {
@@ -89,6 +123,7 @@ exports.updateUserProfile = async (req, res) => {
 
     if (firstName) user.firstName = firstName;
     if (lastName) user.lastName = lastName;
+    if (nickname !== undefined) user.nickname = nickname;
     if (username) user.username = username;
     if (password) {
       const salt = await bcrypt.genSalt(10);
