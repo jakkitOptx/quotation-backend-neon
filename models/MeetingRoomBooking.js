@@ -27,6 +27,9 @@ const MeetingRoomBookingSchema = new mongoose.Schema(
 
     // ✅ เพิ่มเพื่อ “แสดงชื่อคนจอง” (snapshot)
     createdByName: { type: String, default: null }, // เช่น "Aj Arm"
+    createdByFirstName: { type: String, default: null },
+    createdByLastName: { type: String, default: null },
+    createdByNickname: { type: String, default: null },
     createdByApp: {
       type: String,
       enum: ["OPTX", "NEON"],

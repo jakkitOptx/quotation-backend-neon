@@ -1,6 +1,7 @@
 // controllers/meetingRoomController.js
 const MeetingRoom = require("../models/MeetingRoom");
 const MeetingRoomBooking = require("../models/MeetingRoomBooking");
+const User = require("../models/User");
 
 const timeToMin = (t) => {
   if (!t) return 0;
@@ -36,6 +37,63 @@ const buildBookingDateFilter = ({ dateKey, startDate, endDate }) => {
       dateKey: { $gte: startDate, $lte: endDate },
     },
   };
+};
+
+const buildFullName = (firstName, lastName) => {
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  return fullName || null;
+};
+
+const withBookerProfiles = async (bookings) => {
+  const isArray = Array.isArray(bookings);
+  const items = isArray ? bookings : [bookings];
+  const plainItems = items.filter(Boolean).map((booking) =>
+    typeof booking.toObject === "function" ? booking.toObject() : booking
+  );
+
+  const userKeys = [
+    ...new Set(
+      plainItems
+        .flatMap((booking) => [booking.createdByUser, booking.createdByEmail])
+        .filter(Boolean)
+    ),
+  ];
+
+  const users = userKeys.length
+    ? await User.find({ username: { $in: userKeys } })
+        .select("username firstName lastName nickname")
+        .lean()
+    : [];
+  const usersByUsername = new Map(users.map((user) => [user.username, user]));
+
+  const enriched = plainItems.map((booking) => {
+    const bookingUser =
+      usersByUsername.get(booking.createdByUser) ||
+      usersByUsername.get(booking.createdByEmail);
+
+    const createdByFirstName =
+      booking.createdByFirstName ?? bookingUser?.firstName ?? null;
+    const createdByLastName =
+      booking.createdByLastName ?? bookingUser?.lastName ?? null;
+    const createdByNickname =
+      booking.createdByNickname ?? bookingUser?.nickname ?? null;
+    const createdByName =
+      booking.createdByName ||
+      buildFullName(createdByFirstName, createdByLastName) ||
+      booking.createdByUser ||
+      booking.createdByEmail ||
+      null;
+
+    return {
+      ...booking,
+      createdByName,
+      createdByFirstName,
+      createdByLastName,
+      createdByNickname,
+    };
+  });
+
+  return isArray ? enriched : enriched[0];
 };
 
 const defaultRooms = [
@@ -146,7 +204,7 @@ exports.getBookings = async (req, res) => {
       .sort({ dateKey: 1, startMin: 1 })
       .lean();
 
-    res.json(bookings);
+    res.json(await withBookerProfiles(bookings));
   } catch (err) {
     res
       .status(500)
@@ -211,6 +269,9 @@ exports.createBooking = async (req, res) => {
       req.user?.firstName && req.user?.lastName
         ? `${req.user.firstName} ${req.user.lastName}`
         : req.user?.username || req.user?.email || null;
+    const createdByFirstName = req.user?.firstName || null;
+    const createdByLastName = req.user?.lastName || null;
+    const createdByNickname = req.user?.nickname || null;
 
     const createdByApp =
       (req.user?.company || "").toUpperCase() === "OPTX" ? "OPTX" : "NEON";
@@ -232,11 +293,14 @@ exports.createBooking = async (req, res) => {
 
       // ✅ ของใหม่
       createdByName,
+      createdByFirstName,
+      createdByLastName,
+      createdByNickname,
       createdByApp,
       createdByDepartment,
     });
 
-    res.status(201).json(booking);
+    res.status(201).json(await withBookerProfiles(booking));
   } catch (err) {
     res
       .status(500)
@@ -339,7 +403,7 @@ exports.updateBooking = async (req, res) => {
     booking.purpose = purpose?.trim() ?? booking.purpose;
 
     await booking.save();
-    res.json(booking);
+    res.json(await withBookerProfiles(booking));
   } catch (err) {
     res.status(500).json({
       message: "Error updating booking",
@@ -383,7 +447,7 @@ exports.getMyBookings = async (req, res) => {
       .sort({ dateKey: 1, startMin: 1 })
       .lean();
 
-    res.json(bookings);
+    res.json(await withBookerProfiles(bookings));
   } catch (err) {
     res
       .status(500)
