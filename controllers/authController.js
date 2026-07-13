@@ -30,6 +30,7 @@ exports.register = async (req, res) => {
           const {
             firstName,
             lastName,
+            nickname,
             username,
             password,
             level,
@@ -59,6 +60,7 @@ exports.register = async (req, res) => {
           return {
             firstName,
             lastName,
+            nickname: nickname || "",
             username,
             password: hashedPassword, // ✅ บันทึก password แบบเข้ารหัส
             level: level || 1,
@@ -103,6 +105,7 @@ exports.register = async (req, res) => {
         _id: user._id, // ✅ เพิ่มตรงนี้
         firstName: user.firstName,
         lastName: user.lastName,
+        nickname: user.nickname,
         username: user.username,
         level: user.level,
         company: user.company,
@@ -147,6 +150,7 @@ exports.login = async (req, res) => {
       {
         userId: user._id,
         username: user.username,
+        nickname: user.nickname,
         level: user.level,
         company: user.company,
         role: user.role,
@@ -164,8 +168,10 @@ exports.login = async (req, res) => {
     res.status(200).json({
       token,
       user: {
+        _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
+        nickname: user.nickname,
         username: user.username,
         level: user.level,
         company: user.company,

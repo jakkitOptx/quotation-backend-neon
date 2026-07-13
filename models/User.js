@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const UserSchema = new mongoose.Schema({
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
+  nickname: { type: String, default: "" },
   username: { type: String, required: true, unique: true }, // ใช้ username เป็น email
   password: { type: String, required: true },
   level: { type: Number, default: 1 }, // Default level เป็น 1
