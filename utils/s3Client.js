@@ -1,4 +1,9 @@
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectsCommand,
+} = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const s3 = new S3Client({
@@ -89,10 +94,37 @@ const generateSignedS3Url = async ({
   };
 };
 
+const deleteS3Objects = async ({ bucket, keys = [] }) => {
+  const cleanKeys = Array.from(
+    new Set(keys.map((key) => extractS3KeyFromUrl(key)).filter(Boolean))
+  );
+
+  if (cleanKeys.length === 0) {
+    return {
+      deletedKeys: [],
+    };
+  }
+
+  await s3.send(
+    new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: {
+        Objects: cleanKeys.map((key) => ({ Key: key })),
+        Quiet: true,
+      },
+    })
+  );
+
+  return {
+    deletedKeys: cleanKeys,
+  };
+};
+
 module.exports = {
   s3,
   uploadBufferToS3,
   buildS3Url,
   extractS3KeyFromUrl,
   generateSignedS3Url,
+  deleteS3Objects,
 };
