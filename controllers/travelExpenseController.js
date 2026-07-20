@@ -4,7 +4,7 @@ const User = require("../models/User");
 const ApproveFlow = require("../models/ApproveFlow");
 const Log = require("../models/Log");
 const { getDrivingDistance } = require("../services/googleRoutesService");
-const { uploadBufferToS3 } = require("../utils/s3Client");
+const { uploadBufferToS3, deleteS3Objects } = require("../utils/s3Client");
 
 const MAX_TRAVEL_APPROVAL_LEVEL = 5;
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
@@ -484,6 +484,23 @@ const uploadTollReceiptToS3 = async (file) => {
   });
 };
 
+const deleteTravelExpenseReceiptsFromS3 = async (receiptUrls = []) => {
+  const bucket = process.env.AWS_BUCKET;
+
+  if (!bucket || !Array.isArray(receiptUrls) || receiptUrls.length === 0) {
+    return;
+  }
+
+  try {
+    await deleteS3Objects({
+      bucket,
+      keys: receiptUrls,
+    });
+  } catch (error) {
+    console.error("Failed to delete travel expense receipts from S3:", error);
+  }
+};
+
 exports.estimateTravelExpense = async (req, res) => {
   try {
     const {
@@ -749,6 +766,9 @@ exports.updateTravelExpense = async (req, res) => {
     const uploadedReceipts = await Promise.all(
       (req.files || []).map(uploadTollReceiptToS3)
     );
+    const previousReceiptUrls = Array.isArray(doc.tollReceiptUrls)
+      ? [...doc.tollReceiptUrls]
+      : [];
     const keptReceiptUrls = parseStringList(retainedTollReceiptUrls);
     const nextUploadedReceiptUrls = uploadedReceipts.map((file) => file.url);
     const tollReceiptUrls =
@@ -759,6 +779,9 @@ exports.updateTravelExpense = async (req, res) => {
           : retainedTollReceiptUrls !== undefined
             ? []
             : doc.tollReceiptUrls || [];
+    const removedReceiptUrls = previousReceiptUrls.filter(
+      (url) => !tollReceiptUrls.includes(url)
+    );
 
     const changedFields = buildUpdateChangeSummary(doc, {
       origin: estimate.cleanOrigin,
@@ -803,6 +826,7 @@ exports.updateTravelExpense = async (req, res) => {
     await resetTravelExpenseApprovalFlow(doc, requester, doc.requestedByLevel);
 
     await doc.save();
+    await deleteTravelExpenseReceiptsFromS3(removedReceiptUrls);
     await createTravelExpenseLog({
       travelExpenseId: doc._id,
       performedBy: user.username,
@@ -853,6 +877,7 @@ exports.deleteTravelExpense = async (req, res) => {
       action: "delete",
       description: `Travel expense deleted. Route: ${doc.origin} -> ${doc.destination}`,
     });
+    await deleteTravelExpenseReceiptsFromS3(doc.tollReceiptUrls || []);
     await TravelExpense.deleteOne({ _id: doc._id });
 
     return res.status(200).json({
