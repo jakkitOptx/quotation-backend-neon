@@ -435,29 +435,17 @@ const canViewTravelExpenseLog = (user, doc) => {
 const calculateTravelEstimate = async (origin, destination, routeOptions = {}) => {
   const cleanOrigin = origin.trim();
   const cleanDestination = destination.trim();
-
-  let distanceKm = 0;
-  let distanceMeters = 0;
-  let routeDuration = null;
-  let routeDurationText = null;
-  let routeAvoidTolls = false;
-  let routeAvoidHighways = false;
-
-  try {
-    const routeResult = await getDrivingDistance(
-      cleanOrigin,
-      cleanDestination,
-      routeOptions
-    );
-    distanceKm = Number(routeResult?.distanceKm || 0);
-    distanceMeters = Number(routeResult?.distanceMeters || 0);
-    routeDuration = routeResult?.duration || null;
-    routeDurationText = routeResult?.durationText || null;
-    routeAvoidTolls = routeResult?.avoidTolls;
-    routeAvoidHighways = routeResult?.avoidHighways;
-  } catch (routeError) {
-    console.error("Route calculation failed:", routeError.message);
-  }
+  const routeResult = await getDrivingDistance(
+    cleanOrigin,
+    cleanDestination,
+    routeOptions
+  );
+  const distanceKm = Number(routeResult?.distanceKm || 0);
+  const distanceMeters = Number(routeResult?.distanceMeters || 0);
+  const routeDuration = routeResult?.duration || null;
+  const routeDurationText = routeResult?.durationText || null;
+  const routeAvoidTolls = routeResult?.avoidTolls;
+  const routeAvoidHighways = routeResult?.avoidHighways;
 
   const ratePerKm = Number(process.env.TRAVEL_RATE_PER_KM || 0);
   const amount = Number((distanceKm * ratePerKm).toFixed(2));
@@ -542,7 +530,10 @@ exports.estimateTravelExpense = async (req, res) => {
     });
   } catch (error) {
     console.error("estimateTravelExpense error:", error);
-    return res.status(500).json({ message: error.message });
+    return res.status(error.statusCode || 500).json({
+      message: error.message,
+      details: error.details || null,
+    });
   }
 };
 
