@@ -1,6 +1,7 @@
 const axios = require("axios");
 
 const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+const GOOGLE_MAPS_REGION_CODE = process.env.GOOGLE_MAPS_REGION_CODE || "th";
 
 const formatDurationMinutes = (durationValue) => {
   if (!durationValue) return null;
@@ -80,6 +81,7 @@ async function getDrivingDistance(origin, destination, options = {}) {
       travelMode: "DRIVE",
       routingPreference: "TRAFFIC_UNAWARE",
       languageCode: "th",
+      regionCode: GOOGLE_MAPS_REGION_CODE,
       units: "METRIC",
       routeModifiers: {
         avoidTolls,
@@ -90,7 +92,8 @@ async function getDrivingDistance(origin, destination, options = {}) {
     const headers = {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": GOOGLE_API_KEY,
-      "X-Goog-FieldMask": "routes.distanceMeters,routes.duration",
+      "X-Goog-FieldMask":
+        "routes.distanceMeters,routes.duration,geocodingResults,fallbackInfo",
     };
 
     const response = await axios.post(url, body, { headers });
@@ -98,10 +101,17 @@ async function getDrivingDistance(origin, destination, options = {}) {
     const route = response?.data?.routes?.[0];
 
     if (!route) {
-      throw new Error("Route not found");
+      const geocodingResults = response?.data?.geocodingResults;
+      const fallbackInfo = response?.data?.fallbackInfo;
+      const error = new Error("Route not found");
+      error.details = {
+        geocodingResults,
+        fallbackInfo,
+      };
+      throw error;
     }
 
-    const distanceMeters = route.distanceMeters;
+    const distanceMeters = Number(route.distanceMeters || 0);
     const distanceKm = Number((distanceMeters / 1000).toFixed(2));
 
     return {
@@ -113,11 +123,16 @@ async function getDrivingDistance(origin, destination, options = {}) {
       avoidHighways,
     };
   } catch (error) {
-    console.error(
-      "Google Routes API error:",
-      error?.response?.data || error.message
-    );
-    throw new Error("Failed to calculate route distance");
+    const errorPayload = error?.response?.data || error?.details || error.message;
+    console.error("Google Routes API error:", errorPayload);
+
+    const wrappedError = new Error("Failed to calculate route distance");
+    wrappedError.statusCode =
+      error?.response?.status ||
+      error?.statusCode ||
+      502;
+    wrappedError.details = errorPayload;
+    throw wrappedError;
   }
 }
 
