@@ -15,6 +15,7 @@ const {
 } = require("../utils/s3Client");
 const {
   buildQuotationVisibilityQuery,
+  canEditQuotation,
   canApproveAcrossDepartments,
   canViewQuotation,
 } = require("../utils/quotationAccess");
@@ -700,6 +701,10 @@ exports.updateQuotationReason = async (req, res) => {
       return res.status(404).json({ message: "Quotation not found" });
     }
 
+    if (!canEditQuotation(req.user, quotation)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
     quotation.reason = reason;
     await quotation.save();
 
@@ -719,6 +724,10 @@ exports.resetQuotation = async (req, res) => {
 
     if (!quotation) {
       return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    if (!canEditQuotation(req.user, quotation)) {
+      return res.status(403).json({ message: "Forbidden" });
     }
 
     if (!["Canceled", "Approved"].includes(quotation.approvalStatus)) {
@@ -1110,6 +1119,10 @@ exports.sendQuotationToCustomer = async (req, res) => {
 
     if (!quotation) {
       return res.status(404).json({ message: "Quotation not found" });
+    }
+
+    if (!canEditQuotation(req.user, quotation)) {
+      return res.status(403).json({ message: "Forbidden" });
     }
 
     if (quotation.approvalStatus !== "Approved") {

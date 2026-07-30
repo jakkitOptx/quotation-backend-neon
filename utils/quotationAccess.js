@@ -42,6 +42,12 @@ const buildQuotationVisibilityQuery = (user = {}) => {
     return { teamGroup: user.teamGroup || "" };
   }
 
+  if (level === 1) {
+    return user.teamGroup
+      ? { teamGroup: user.teamGroup || "" }
+      : { createdByUser: user.username || "" };
+  }
+
   return { createdByUser: user.username || "" };
 };
 
@@ -70,7 +76,25 @@ const canViewQuotation = (user, quotation) => {
     return String(quotation.teamGroup || "") === String(user.teamGroup || "");
   }
 
+  if (level === 1) {
+    return user.teamGroup
+      ? String(quotation.teamGroup || "") === String(user.teamGroup || "")
+      : String(quotation.createdByUser || "") === String(user.username || "");
+  }
+
   return String(quotation.createdByUser || "") === String(user.username || "");
+};
+
+const canEditQuotation = (user, quotation) => {
+  if (!user || !quotation) return false;
+  if (user.role === "admin" || isManagementExecutive(user)) return true;
+
+  const level = Number(user.level || 0);
+  if (level === 1) {
+    return String(quotation.createdByUser || "") === String(user.username || "");
+  }
+
+  return true;
 };
 
 const canApproveAcrossDepartments = (user, quotation) =>
@@ -80,6 +104,7 @@ const canApproveAcrossDepartments = (user, quotation) =>
 
 module.exports = {
   buildQuotationVisibilityQuery,
+  canEditQuotation,
   canApproveAcrossDepartments,
   canViewQuotation,
   isManagementExecutive,

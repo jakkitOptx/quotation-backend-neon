@@ -6,6 +6,7 @@ const Log = require("../models/Log"); // ✅ เพิ่ม Log model
 const User = require("../models/User"); // ✅ เพิ่มสำหรับ lookup
 const quotationController = require("../controllers/quotationController");
 const _ = require("lodash");
+const { canEditQuotation } = require("../utils/quotationAccess");
 const authMiddleware = require("../middlewares/authMiddleware"); // ✅ อย่าลืมใช้
 
 // ✅ ฟังก์ชันปัดเศษให้เป็นทศนิยม 2 ตำแหน่ง
@@ -114,6 +115,9 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     const existingQuotation = await Quotation.findById(req.params.id);
     if (!existingQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
+    }
+    if (!canEditQuotation(req.user, existingQuotation)) {
+      return res.status(403).json({ message: "Forbidden" });
     }
 
     // ✅ เช็คปีเดิม vs ปีใหม่
@@ -224,10 +228,15 @@ router.patch("/:id", authMiddleware, async (req, res) => {
 router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     // ✅ ลบ Quotation ออกจากฐานข้อมูล
-    const deletedQuotation = await Quotation.findByIdAndDelete(req.params.id);
-    if (!deletedQuotation) {
+    const existingQuotation = await Quotation.findById(req.params.id);
+    if (!existingQuotation) {
       return res.status(404).json({ message: "Quotation not found" });
     }
+    if (!canEditQuotation(req.user, existingQuotation)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const deletedQuotation = await Quotation.findByIdAndDelete(req.params.id);
 
     // ✅ ใช้ข้อมูลผู้ใช้จาก Token โดยตรง
     const user = req.user;
@@ -334,6 +343,7 @@ router.patch("/:id/cancel", async (req, res) => {
 });
 
 // อัปเดตเหตุผลของ Quotation
+router.patch("/:id/reason", authMiddleware, quotationController.updateQuotationReason);
 router.patch("/:id/reason", async (req, res) => {
   const { reason } = req.body;
 
