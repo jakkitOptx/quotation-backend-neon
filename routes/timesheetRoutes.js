@@ -21,6 +21,25 @@ router.post("/entries", timesheetController.createEntry);
 router.patch("/entries/:id", timesheetController.updateEntry);
 router.delete("/entries/:id", timesheetController.deleteEntry);
 
+router.post("/submissions", timesheetController.createSubmission);
+router.get("/submissions", timesheetController.getMySubmissions);
+router.get("/submissions/:id", timesheetController.getMySubmissionDetail);
+router.post(
+  "/submissions/:id/withdraw",
+  timesheetController.withdrawSubmission
+);
+router.post(
+  "/submissions/:id/approve",
+  timesheetController.approveSubmission
+);
+router.post(
+  "/submissions/:id/reject",
+  timesheetController.rejectSubmission
+);
+
+router.get("/approvals", timesheetController.getApprovalInbox);
+router.get("/approvals/:id", timesheetController.getApprovalDetail);
+
 router.get("/dashboard/users", timesheetController.getDashboardUsers);
 router.get("/dashboard/summary", timesheetController.getDashboardSummary);
 router.get(

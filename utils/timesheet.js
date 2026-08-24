@@ -98,6 +98,37 @@ const parseWorkDate = (value) => {
   return createThailandDate(parts.year, parts.month, parts.day, 0, 0, 0, 0);
 };
 
+const getWeeklyPeriod = (periodStart) => {
+  const startParts = parseDateOnly(periodStart);
+  if (!startParts) {
+    return null;
+  }
+
+  const calendarDate = new Date(
+    Date.UTC(startParts.year, startParts.month - 1, startParts.day)
+  );
+  if (calendarDate.getUTCDay() !== 1) {
+    return null;
+  }
+
+  const endParts = addDays(startParts, 6);
+  return {
+    periodType: "week",
+    periodStart: createThailandDate(
+      startParts.year,
+      startParts.month,
+      startParts.day
+    ),
+    periodEnd: createThailandDate(endParts.year, endParts.month, endParts.day),
+    periodStartKey: `${startParts.year.toString().padStart(4, "0")}-${String(
+      startParts.month
+    ).padStart(2, "0")}-${String(startParts.day).padStart(2, "0")}`,
+    periodEndKey: `${endParts.year.toString().padStart(4, "0")}-${String(
+      endParts.month
+    ).padStart(2, "0")}-${String(endParts.day).padStart(2, "0")}`,
+  };
+};
+
 const formatWorkDate = (value) => {
   const date = new Date(value);
   const thailandTime = new Date(date.getTime() + THAILAND_UTC_OFFSET_MINUTES * 60 * 1000);
@@ -111,5 +142,6 @@ module.exports = {
   normalizeScopedName,
   parseDateRange,
   parseWorkDate,
+  getWeeklyPeriod,
   formatWorkDate,
 };

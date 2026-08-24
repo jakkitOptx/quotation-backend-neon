@@ -4,6 +4,8 @@ const User = require("../models/User");
 const TimesheetProject = require("../models/TimesheetProject");
 const TimesheetDetail = require("../models/TimesheetDetail");
 const TimesheetEntry = require("../models/TimesheetEntry");
+const TimesheetSubmission = require("../models/TimesheetSubmission");
+const ApproveFlow = require("../models/ApproveFlow");
 const {
   canViewTimesheet,
   getVisibleDashboardUsers,
@@ -12,8 +14,14 @@ const {
   normalizeScopedName,
   parseDateRange,
   parseWorkDate,
+  getWeeklyPeriod,
   formatWorkDate,
 } = require("../utils/timesheet");
+const {
+  ACTIVE_SUBMISSION_STATUSES,
+  isTimesheetDateLocked,
+  areTimesheetDatesLocked,
+} = require("../services/timesheetLockService");
 
 const CLIENT_SELECT_FIELDS =
   "customerName companyBaseName email authorizedApprovers address taxIdentificationNumber contactPhoneNumber branchNo";
@@ -59,6 +67,107 @@ const buildDetailResponse = (detail) => ({
 
 const TIMESHEET_ENTRY_DUPLICATE_MESSAGE =
   "A timesheet entry already exists for this detail and date";
+const TIMESHEET_PERIOD_LOCKED_MESSAGE = "This timesheet period is locked";
+const SUBMISSION_STATUSES = ["pending", "approved", "rejected", "withdrawn"];
+
+const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
+const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildSubmissionResponse = (submission) => ({
+  ...submission,
+  periodStart: formatWorkDate(submission.periodStart),
+  periodEnd: formatWorkDate(submission.periodEnd),
+});
+
+const buildApprovalStepsSnapshot = async (user) => {
+  if (!user.flow) {
+    return null;
+  }
+
+  const flow = await ApproveFlow.findById(user.flow, "approvalHierarchy").lean();
+  const hierarchy = (flow?.approvalHierarchy || [])
+    .map((step) => ({
+      level: Number(step.level),
+      approverUsername: String(step.approver || "").trim(),
+    }))
+    .filter((step) => Number.isFinite(step.level) && step.approverUsername)
+    .sort(
+      (left, right) =>
+        left.level - right.level ||
+        left.approverUsername.localeCompare(right.approverUsername)
+    );
+
+  if (hierarchy.length === 0) {
+    return null;
+  }
+
+  const approverUsernames = [...new Set(hierarchy.map((step) => normalizeUsername(step.approverUsername)))];
+  const approvers = await User.find(
+    { username: { $in: approverUsernames } },
+    "_id username"
+  ).lean();
+  const approverIdsByUsername = new Map(
+    approvers.map((approver) => [normalizeUsername(approver.username), approver._id])
+  );
+
+  return hierarchy.map((step, index) => ({
+    level: step.level,
+    approverUsername: step.approverUsername,
+    approverUserId: approverIdsByUsername.get(
+      normalizeUsername(step.approverUsername)
+    ) || null,
+    status: index === 0 ? "pending" : "waiting",
+  }));
+};
+
+const matchesApprovalStep = (step, viewer) => {
+  if (!step || !viewer?._id) {
+    return false;
+  }
+
+  if (step.approverUserId) {
+    return String(step.approverUserId) === String(viewer._id);
+  }
+
+  return (
+    normalizeUsername(step.approverUsername) === normalizeUsername(viewer.username)
+  );
+};
+
+const getCurrentApprovalStep = (submission) => {
+  if (submission?.status !== "pending" || submission.currentApprovalLevel == null) {
+    return null;
+  }
+
+  const index = (submission.approvalSteps || []).findIndex(
+    (step) =>
+      step.status === "pending" &&
+      Number(step.level) === Number(submission.currentApprovalLevel)
+  );
+
+  return index === -1 ? null : { index, step: submission.approvalSteps[index] };
+};
+
+const buildApprovalActionFilter = ({ submission, current, viewer }) => {
+  const currentPath = `approvalSteps.${current.index}`;
+  const filter = {
+    _id: submission._id,
+    status: "pending",
+    currentApprovalLevel: current.step.level,
+    [`${currentPath}.status`]: "pending",
+  };
+
+  if (current.step.approverUserId) {
+    filter[`${currentPath}.approverUserId`] = viewer._id;
+  } else {
+    filter[`${currentPath}.approverUsername`] = new RegExp(
+      `^${escapeRegex(viewer.username)}$`,
+      "i"
+    );
+  }
+
+  return filter;
+};
 
 const buildDailyKeys = (range) => {
   const dailyKeys = [];
@@ -253,6 +362,20 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
   return {
     totalHours: Number(totalHours.toFixed(2)),
     users,
+  };
+};
+
+const getTimesheetSummaryForUser = async (userId, range) => {
+  const aggregated = await aggregateHierarchicalSummary({
+    userIds: [userId],
+    range,
+  });
+  const userSummary = aggregated.users[0];
+
+  return {
+    range: { from: range.from, to: range.to },
+    totalHours: aggregated.totalHours,
+    clients: userSummary?.clients || [],
   };
 };
 
@@ -761,6 +884,10 @@ exports.createEntry = async (req, res) => {
       return res.status(400).json({ message: "Valid workDate is required in YYYY-MM-DD format" });
     }
 
+    if (await isTimesheetDateLocked(req.user._id, parsedWorkDate)) {
+      return res.status(409).json({ message: TIMESHEET_PERIOD_LOCKED_MESSAGE });
+    }
+
     const hierarchyError = await validateHierarchy({
       userId: req.user._id,
       clientId,
@@ -846,6 +973,15 @@ exports.updateEntry = async (req, res) => {
       return res.status(400).json({ message: "Valid workDate is required in YYYY-MM-DD format" });
     }
 
+    if (
+      await areTimesheetDatesLocked(req.user._id, [
+        entry.workDate,
+        nextWorkDate,
+      ])
+    ) {
+      return res.status(409).json({ message: TIMESHEET_PERIOD_LOCKED_MESSAGE });
+    }
+
     const hierarchyError = await validateHierarchy({
       userId: req.user._id,
       clientId: nextClientId,
@@ -901,19 +1037,468 @@ exports.deleteEntry = async (req, res) => {
       return res.status(400).json({ message: "Invalid entry id" });
     }
 
-    const deleted = await TimesheetEntry.findOneAndDelete({
+    const entry = await TimesheetEntry.findOne({
       _id: id,
       userId: req.user._id,
     });
 
-    if (!deleted) {
+    if (!entry) {
       return res.status(404).json({ message: "Timesheet entry not found" });
     }
+
+    if (await isTimesheetDateLocked(req.user._id, entry.workDate)) {
+      return res.status(409).json({ message: TIMESHEET_PERIOD_LOCKED_MESSAGE });
+    }
+
+    await entry.deleteOne();
 
     return res.status(200).json({ message: "Timesheet entry deleted successfully" });
   } catch (error) {
     console.error("deleteEntry error:", error);
     return res.status(500).json({ message: "Failed to delete timesheet entry" });
+  }
+};
+
+exports.createSubmission = async (req, res) => {
+  try {
+    const period = getWeeklyPeriod(req.body?.periodStart);
+    if (!period) {
+      return res.status(400).json({
+        message: "periodStart must be a valid Monday in YYYY-MM-DD format",
+      });
+    }
+
+    const approvalSteps = await buildApprovalStepsSnapshot(req.user);
+    if (!approvalSteps) {
+      return res.status(422).json({
+        message: "No approval flow is configured for this user",
+      });
+    }
+
+    const activeOverlap = await TimesheetSubmission.findOne({
+      userId: req.user._id,
+      status: { $in: ACTIVE_SUBMISSION_STATUSES },
+      periodStart: { $lte: period.periodEnd },
+      periodEnd: { $gte: period.periodStart },
+    })
+      .select("_id")
+      .lean();
+    if (activeOverlap) {
+      return res.status(409).json({
+        message: "An active timesheet submission already exists for this period",
+      });
+    }
+
+    const totals = await TimesheetEntry.aggregate([
+      {
+        $match: {
+          userId: new mongoose.Types.ObjectId(req.user._id),
+          workDate: { $gte: period.periodStart, $lte: period.periodEnd },
+        },
+      },
+      { $group: { _id: null, totalHours: { $sum: "$hours" } } },
+    ]);
+    const totalHours = Number((totals[0]?.totalHours || 0).toFixed(2));
+
+    if (totalHours <= 0) {
+      return res.status(422).json({
+        message: "Timesheet period must contain at least one hour before submission",
+      });
+    }
+
+    const submission = await TimesheetSubmission.create({
+      userId: req.user._id,
+      periodType: period.periodType,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      status: "pending",
+      totalHours,
+      currentApprovalLevel: approvalSteps[0].level,
+      approvalSteps,
+      submittedAt: new Date(),
+    });
+
+    return res.status(201).json({
+      message: "Timesheet submitted successfully",
+      data: buildSubmissionResponse(submission.toObject()),
+    });
+  } catch (error) {
+    console.error("createSubmission error:", error);
+    if (isDuplicateKeyError(error)) {
+      return res.status(409).json({
+        message: "An active timesheet submission already exists for this period",
+      });
+    }
+
+    return res.status(500).json({ message: "Failed to submit timesheet" });
+  }
+};
+
+exports.getMySubmissions = async (req, res) => {
+  try {
+    const { from, to, status } = req.query;
+    const query = { userId: req.user._id };
+
+    if (status !== undefined) {
+      if (!SUBMISSION_STATUSES.includes(status)) {
+        return res.status(400).json({ message: "Invalid submission status" });
+      }
+      query.status = status;
+    }
+
+    if (from !== undefined || to !== undefined) {
+      const range = parseDateRange(from, to);
+      if (!range) {
+        return res.status(400).json({ message: "Valid from and to dates are required" });
+      }
+
+      query.periodStart = { $lt: range.endExclusive };
+      query.periodEnd = { $gte: range.start };
+    }
+
+    const submissions = await TimesheetSubmission.find(query)
+      .sort({ submittedAt: -1, createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      data: submissions.map(buildSubmissionResponse),
+    });
+  } catch (error) {
+    console.error("getMySubmissions error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet submissions" });
+  }
+};
+
+exports.getMySubmissionDetail = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid submission id" });
+    }
+
+    const submission = await TimesheetSubmission.findOne({
+      _id: id,
+      userId: req.user._id,
+    }).lean();
+    if (!submission) {
+      return res.status(404).json({ message: "Timesheet submission not found" });
+    }
+
+    return res.status(200).json({ data: buildSubmissionResponse(submission) });
+  } catch (error) {
+    console.error("getMySubmissionDetail error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet submission" });
+  }
+};
+
+exports.withdrawSubmission = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid submission id" });
+    }
+
+    const submission = await TimesheetSubmission.findOne({
+      _id: id,
+      userId: req.user._id,
+    });
+    if (!submission) {
+      return res.status(404).json({ message: "Timesheet submission not found" });
+    }
+
+    if (submission.status !== "pending") {
+      return res.status(409).json({
+        message: "Only pending timesheet submissions can be withdrawn",
+      });
+    }
+
+    if (submission.approvalSteps.some((step) => step.status === "approved")) {
+      return res.status(409).json({
+        message: "A timesheet submission cannot be withdrawn after approval has started",
+      });
+    }
+
+    submission.status = "withdrawn";
+    submission.withdrawnAt = new Date();
+    submission.currentApprovalLevel = null;
+    await submission.save();
+
+    return res.status(200).json({
+      message: "Timesheet submission withdrawn successfully",
+      data: buildSubmissionResponse(submission.toObject()),
+    });
+  } catch (error) {
+    console.error("withdrawSubmission error:", error);
+    return res.status(500).json({ message: "Failed to withdraw timesheet submission" });
+  }
+};
+
+exports.getApprovalInbox = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const identityConditions = [];
+
+    if (req.user?._id) {
+      identityConditions.push({
+        approvalSteps: {
+          $elemMatch: { status: "pending", approverUserId: req.user._id },
+        },
+      });
+    }
+
+    if (normalizeUsername(req.user?.username)) {
+      identityConditions.push({
+        approvalSteps: {
+          $elemMatch: {
+            status: "pending",
+            approverUserId: null,
+            approverUsername: new RegExp(
+              `^${escapeRegex(req.user.username)}$`,
+              "i"
+            ),
+          },
+        },
+      });
+    }
+
+    if (identityConditions.length === 0) {
+      return res.status(200).json({ data: [] });
+    }
+
+    const query = { status: "pending", $or: identityConditions };
+    if (from !== undefined || to !== undefined) {
+      const range = parseDateRange(from, to);
+      if (!range) {
+        return res.status(400).json({ message: "Valid from and to dates are required" });
+      }
+
+      query.periodStart = { $lt: range.endExclusive };
+      query.periodEnd = { $gte: range.start };
+    }
+
+    const candidates = await TimesheetSubmission.find(query)
+      .populate("userId", "username department")
+      .sort({ submittedAt: 1, createdAt: 1 })
+      .lean();
+    const submissions = candidates.filter((submission) => {
+      const current = getCurrentApprovalStep(submission);
+      return current && matchesApprovalStep(current.step, req.user);
+    });
+
+    return res.status(200).json({
+      data: submissions.map((submission) => ({
+        _id: submission._id,
+        userId: submission.userId?._id || submission.userId,
+        user: submission.userId
+          ? {
+              _id: submission.userId._id,
+              username: submission.userId.username,
+              department: submission.userId.department || "",
+            }
+          : null,
+        periodStart: formatWorkDate(submission.periodStart),
+        periodEnd: formatWorkDate(submission.periodEnd),
+        totalHours: submission.totalHours,
+        currentApprovalLevel: submission.currentApprovalLevel,
+        submittedAt: submission.submittedAt,
+      })),
+    });
+  } catch (error) {
+    console.error("getApprovalInbox error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet approvals" });
+  }
+};
+
+exports.getApprovalDetail = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid submission id" });
+    }
+
+    const submission = await TimesheetSubmission.findById(id).lean();
+    if (!submission) {
+      return res.status(404).json({ message: "Timesheet submission not found" });
+    }
+
+    const current = getCurrentApprovalStep(submission);
+    if (!current || !matchesApprovalStep(current.step, req.user)) {
+      return res.status(403).json({
+        message: "You are not authorized to approve this timesheet",
+      });
+    }
+
+    const submitter = await User.findById(
+      submission.userId,
+      "_id username department"
+    ).lean();
+    if (!submitter) {
+      return res.status(404).json({ message: "Timesheet submitter not found" });
+    }
+
+    const range = parseDateRange(
+      formatWorkDate(submission.periodStart),
+      formatWorkDate(submission.periodEnd)
+    );
+    const currentSummary = await getTimesheetSummaryForUser(submission.userId, range);
+
+    return res.status(200).json({
+      submission: buildSubmissionResponse(submission),
+      user: {
+        _id: submitter._id,
+        username: submitter.username,
+        department: submitter.department || "",
+      },
+      summary: {
+        ...currentSummary,
+        submittedTotalHours: submission.totalHours,
+        currentTotalHours: currentSummary.totalHours,
+        hasTotalHoursMismatch:
+          Number(submission.totalHours) !== Number(currentSummary.totalHours),
+      },
+    });
+  } catch (error) {
+    console.error("getApprovalDetail error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet approval" });
+  }
+};
+
+exports.approveSubmission = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid submission id" });
+    }
+
+    const submission = await TimesheetSubmission.findById(id).lean();
+    if (!submission) {
+      return res.status(404).json({ message: "Timesheet submission not found" });
+    }
+
+    const current = getCurrentApprovalStep(submission);
+    if (!current) {
+      return res.status(409).json({
+        message: "This timesheet submission is no longer actionable",
+      });
+    }
+
+    if (!matchesApprovalStep(current.step, req.user)) {
+      return res.status(403).json({
+        message: "You are not authorized to approve this timesheet",
+      });
+    }
+
+    const comment = String(req.body?.comment || "").trim();
+    const nextIndex = submission.approvalSteps.findIndex(
+      (step, index) => index > current.index && step.status === "waiting"
+    );
+    const now = new Date();
+    const currentPath = `approvalSteps.${current.index}`;
+    const update = {
+      $set: {
+        [`${currentPath}.status`]: "approved",
+        [`${currentPath}.actedAt`]: now,
+        [`${currentPath}.comment`]: comment,
+        latestComment: comment,
+      },
+    };
+
+    if (nextIndex === -1) {
+      update.$set.status = "approved";
+      update.$set.currentApprovalLevel = null;
+      update.$set.approvedAt = now;
+    } else {
+      const next = submission.approvalSteps[nextIndex];
+      update.$set[`approvalSteps.${nextIndex}.status`] = "pending";
+      update.$set.currentApprovalLevel = next.level;
+    }
+
+    const updated = await TimesheetSubmission.findOneAndUpdate(
+      buildApprovalActionFilter({ submission, current, viewer: req.user }),
+      update,
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(409).json({
+        message: "This timesheet submission is no longer actionable",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Timesheet submission approved successfully",
+      data: buildSubmissionResponse(updated.toObject()),
+    });
+  } catch (error) {
+    console.error("approveSubmission error:", error);
+    return res.status(500).json({ message: "Failed to approve timesheet submission" });
+  }
+};
+
+exports.rejectSubmission = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reason = String(req.body?.reason || "").trim();
+    if (!reason) {
+      return res.status(400).json({ message: "Rejection reason is required" });
+    }
+
+    if (reason.length > 1000) {
+      return res.status(400).json({ message: "Rejection reason is too long" });
+    }
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid submission id" });
+    }
+
+    const submission = await TimesheetSubmission.findById(id).lean();
+    if (!submission) {
+      return res.status(404).json({ message: "Timesheet submission not found" });
+    }
+
+    const current = getCurrentApprovalStep(submission);
+    if (!current) {
+      return res.status(409).json({
+        message: "This timesheet submission is no longer actionable",
+      });
+    }
+
+    if (!matchesApprovalStep(current.step, req.user)) {
+      return res.status(403).json({
+        message: "You are not authorized to approve this timesheet",
+      });
+    }
+
+    const now = new Date();
+    const currentPath = `approvalSteps.${current.index}`;
+    const updated = await TimesheetSubmission.findOneAndUpdate(
+      buildApprovalActionFilter({ submission, current, viewer: req.user }),
+      {
+        $set: {
+          [`${currentPath}.status`]: "rejected",
+          [`${currentPath}.actedAt`]: now,
+          [`${currentPath}.comment`]: reason,
+          status: "rejected",
+          currentApprovalLevel: null,
+          rejectedAt: now,
+          rejectionReason: reason,
+          latestComment: reason,
+        },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(409).json({
+        message: "This timesheet submission is no longer actionable",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Timesheet submission rejected successfully",
+      data: buildSubmissionResponse(updated.toObject()),
+    });
+  } catch (error) {
+    console.error("rejectSubmission error:", error);
+    return res.status(500).json({ message: "Failed to reject timesheet submission" });
   }
 };
 
@@ -926,17 +1511,9 @@ exports.getSummary = async (req, res) => {
       return res.status(400).json({ message: "Valid from and to dates are required" });
     }
 
-    const aggregated = await aggregateHierarchicalSummary({
-      userIds: [req.user._id],
-      range,
-    });
-    const currentUserSummary = aggregated.users[0];
-
-    return res.status(200).json({
-      range: { from: range.from, to: range.to },
-      totalHours: aggregated.totalHours,
-      clients: currentUserSummary?.clients || [],
-    });
+    return res.status(200).json(
+      await getTimesheetSummaryForUser(req.user._id, range)
+    );
   } catch (error) {
     console.error("getSummary error:", error);
     return res.status(500).json({ message: "Failed to fetch timesheet summary" });
