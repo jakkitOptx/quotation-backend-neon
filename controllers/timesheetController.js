@@ -24,6 +24,24 @@ const isDuplicateKeyError = (error) => error?.code === 11000;
 
 const trimName = (value) => String(value || "").trim().replace(/\s+/g, " ");
 
+const parseHours = (value) => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 const normalizeEntryOutput = (entry) => ({
   ...entry,
   workDate: formatWorkDate(entry.workDate),
@@ -733,8 +751,8 @@ exports.createEntry = async (req, res) => {
       return res.status(400).json({ message: "Valid clientId, projectId and detailId are required" });
     }
 
-    const parsedHours = Number(hours);
-    if (!Number.isFinite(parsedHours) || parsedHours <= 0 || parsedHours > 24) {
+    const parsedHours = parseHours(hours);
+    if (parsedHours === null || parsedHours <= 0 || parsedHours > 24) {
       return res.status(400).json({ message: "Hours must be greater than 0 and less than or equal to 24" });
     }
 
@@ -817,8 +835,8 @@ exports.updateEntry = async (req, res) => {
       return res.status(400).json({ message: "Valid clientId, projectId and detailId are required" });
     }
 
-    const nextHours = req.body.hours !== undefined ? Number(req.body.hours) : entry.hours;
-    if (!Number.isFinite(nextHours) || nextHours <= 0 || nextHours > 24) {
+    const nextHours = req.body.hours !== undefined ? parseHours(req.body.hours) : entry.hours;
+    if (nextHours === null || !Number.isFinite(nextHours) || nextHours <= 0 || nextHours > 24) {
       return res.status(400).json({ message: "Hours must be greater than 0 and less than or equal to 24" });
     }
 
