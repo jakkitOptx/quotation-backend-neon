@@ -1,5 +1,7 @@
 const Log = require("../models/Log");
 
+const LOG_MODULES = new Set(["quotation", "travel_expense", "timesheet"]);
+
 const getThreeMonthsAgo = () => {
   const date = new Date();
   date.setMonth(date.getMonth() - 3);
@@ -28,13 +30,21 @@ const applyTimestampFilter = (filter, startDate, endDate) => {
 // get all logs (defaults to the latest 3 months)
 exports.getAllLogs = async (req, res) => {
   try {
-    const { startDate, endDate, resourceType, quotationId, travelExpenseId } =
+    const { startDate, endDate, resourceType, module, quotationId, travelExpenseId } =
       req.query;
 
     const filter = {};
 
     if (resourceType) {
       filter.resourceType = resourceType;
+    }
+
+    if (module !== undefined) {
+      const normalizedModule = String(module).trim().toLowerCase();
+      if (!LOG_MODULES.has(normalizedModule)) {
+        return res.status(400).json({ message: "Invalid log module" });
+      }
+      filter.module = normalizedModule;
     }
 
     if (quotationId) {
