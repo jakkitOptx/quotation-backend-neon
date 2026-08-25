@@ -6,6 +6,10 @@ const router = express.Router();
 
 router.use(authMiddleware);
 
+router.post("/admin/reopen", timesheetController.reopenTimesheetPeriod);
+router.get("/admin/reopen-status", timesheetController.getAdminReopenStatus);
+router.get("/period-status", timesheetController.getMyPeriodStatus);
+
 router.get("/projects", timesheetController.getProjects);
 router.post("/projects", timesheetController.createProject);
 router.patch("/projects/:id", timesheetController.updateProject);

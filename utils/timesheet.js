@@ -138,10 +138,47 @@ const formatWorkDate = (value) => {
   ).padStart(2, "0")}-${String(thailandTime.getUTCDate()).padStart(2, "0")}`;
 };
 
+const getThailandDateKey = (value = new Date()) => formatWorkDate(value);
+
+const getWeeklyPeriodForWorkDate = (workDate) => {
+  const workDateParts = parseDateOnly(formatWorkDate(workDate));
+  if (!workDateParts) {
+    return null;
+  }
+
+  const calendarDate = new Date(
+    Date.UTC(workDateParts.year, workDateParts.month - 1, workDateParts.day)
+  );
+  const daysSinceMonday = (calendarDate.getUTCDay() + 6) % 7;
+  const startParts = addDays(workDateParts, -daysSinceMonday);
+
+  return getWeeklyPeriod(
+    `${startParts.year.toString().padStart(4, "0")}-${String(startParts.month).padStart(
+      2,
+      "0"
+    )}-${String(startParts.day).padStart(2, "0")}`
+  );
+};
+
+const getDeadlineDateKey = (periodEnd) => {
+  const periodEndParts = parseDateOnly(formatWorkDate(periodEnd));
+  if (!periodEndParts) {
+    return null;
+  }
+
+  const deadlineParts = addDays(periodEndParts, 14);
+  return `${deadlineParts.year.toString().padStart(4, "0")}-${String(
+    deadlineParts.month
+  ).padStart(2, "0")}-${String(deadlineParts.day).padStart(2, "0")}`;
+};
+
 module.exports = {
   normalizeScopedName,
   parseDateRange,
   parseWorkDate,
   getWeeklyPeriod,
+  getWeeklyPeriodForWorkDate,
+  getDeadlineDateKey,
+  getThailandDateKey,
   formatWorkDate,
 };

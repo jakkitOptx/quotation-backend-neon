@@ -5,6 +5,7 @@ const TimesheetProject = require("../models/TimesheetProject");
 const TimesheetDetail = require("../models/TimesheetDetail");
 const TimesheetEntry = require("../models/TimesheetEntry");
 const TimesheetSubmission = require("../models/TimesheetSubmission");
+const TimesheetPeriodOverride = require("../models/TimesheetPeriodOverride");
 const ApproveFlow = require("../models/ApproveFlow");
 const {
   canUserApproveTimesheets,
@@ -18,12 +19,14 @@ const {
   parseWorkDate,
   getWeeklyPeriod,
   formatWorkDate,
+  getThailandDateKey,
 } = require("../utils/timesheet");
 const {
   ACTIVE_SUBMISSION_STATUSES,
-  isTimesheetDateLocked,
-  areTimesheetDatesLocked,
 } = require("../services/timesheetLockService");
+const {
+  getTimesheetPeriodAccess,
+} = require("../services/timesheetPeriodAccessService");
 
 const CLIENT_SELECT_FIELDS =
   "customerName companyBaseName email authorizedApprovers address taxIdentificationNumber contactPhoneNumber branchNo";
@@ -70,10 +73,22 @@ const buildDetailResponse = (detail) => ({
 const TIMESHEET_ENTRY_DUPLICATE_MESSAGE =
   "A timesheet entry already exists for this detail and date";
 const TIMESHEET_PERIOD_LOCKED_MESSAGE = "This timesheet period is locked";
+const TIMESHEET_PERIOD_DEADLINE_MESSAGE =
+  "This timesheet period is past the submission deadline";
 const SUBMISSION_STATUSES = ["pending", "approved", "rejected", "withdrawn"];
 
 const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const respondPeriodAccessBlock = (res, access) =>
+  res.status(409).json({
+    message:
+      access.lockReason === "deadline"
+        ? TIMESHEET_PERIOD_DEADLINE_MESSAGE
+        : TIMESHEET_PERIOD_LOCKED_MESSAGE,
+  });
+
+const isAdmin = (user) => user?.role === "admin";
 
 const buildSubmissionResponse = (submission) => ({
   ...submission,
@@ -886,8 +901,12 @@ exports.createEntry = async (req, res) => {
       return res.status(400).json({ message: "Valid workDate is required in YYYY-MM-DD format" });
     }
 
-    if (await isTimesheetDateLocked(req.user._id, parsedWorkDate)) {
-      return res.status(409).json({ message: TIMESHEET_PERIOD_LOCKED_MESSAGE });
+    const access = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      workDate: parsedWorkDate,
+    });
+    if (!access.canEdit) {
+      return respondPeriodAccessBlock(res, access);
     }
 
     const hierarchyError = await validateHierarchy({
@@ -975,13 +994,20 @@ exports.updateEntry = async (req, res) => {
       return res.status(400).json({ message: "Valid workDate is required in YYYY-MM-DD format" });
     }
 
-    if (
-      await areTimesheetDatesLocked(req.user._id, [
-        entry.workDate,
-        nextWorkDate,
-      ])
-    ) {
-      return res.status(409).json({ message: TIMESHEET_PERIOD_LOCKED_MESSAGE });
+    const sourceAccess = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      workDate: entry.workDate,
+    });
+    if (!sourceAccess.canEdit) {
+      return respondPeriodAccessBlock(res, sourceAccess);
+    }
+
+    const targetAccess = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      workDate: nextWorkDate,
+    });
+    if (!targetAccess.canEdit) {
+      return respondPeriodAccessBlock(res, targetAccess);
     }
 
     const hierarchyError = await validateHierarchy({
@@ -1048,8 +1074,12 @@ exports.deleteEntry = async (req, res) => {
       return res.status(404).json({ message: "Timesheet entry not found" });
     }
 
-    if (await isTimesheetDateLocked(req.user._id, entry.workDate)) {
-      return res.status(409).json({ message: TIMESHEET_PERIOD_LOCKED_MESSAGE });
+    const access = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      workDate: entry.workDate,
+    });
+    if (!access.canEdit) {
+      return respondPeriodAccessBlock(res, access);
     }
 
     await entry.deleteOne();
@@ -1068,6 +1098,14 @@ exports.createSubmission = async (req, res) => {
       return res.status(400).json({
         message: "periodStart must be a valid Monday in YYYY-MM-DD format",
       });
+    }
+
+    const access = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      periodStart: period.periodStartKey,
+    });
+    if (!access.canSubmit) {
+      return respondPeriodAccessBlock(res, access);
     }
 
     const approvalSteps = await buildApprovalStepsSnapshot(req.user);
@@ -1133,6 +1171,196 @@ exports.createSubmission = async (req, res) => {
     }
 
     return res.status(500).json({ message: "Failed to submit timesheet" });
+  }
+};
+
+exports.reopenTimesheetPeriod = async (req, res) => {
+  try {
+    if (!isAdmin(req.user)) {
+      return res.status(403).json({ message: "Admin access is required" });
+    }
+
+    const { userId, periodStart, reopenUntil, reason } = req.body || {};
+    if (!isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Valid userId is required" });
+    }
+
+    const targetUser = await User.findById(userId, "_id").lean();
+    if (!targetUser) {
+      return res.status(404).json({ message: "Target user not found" });
+    }
+
+    const period = getWeeklyPeriod(periodStart);
+    if (!period) {
+      return res.status(400).json({
+        message: "periodStart must be a valid Monday in YYYY-MM-DD format",
+      });
+    }
+
+    const parsedReopenUntil = parseWorkDate(reopenUntil);
+    if (!parsedReopenUntil) {
+      return res.status(400).json({
+        message: "reopenUntil must be a valid date in YYYY-MM-DD format",
+      });
+    }
+
+    const trimmedReason = String(reason || "").trim();
+    if (!trimmedReason) {
+      return res.status(400).json({ message: "A reopen reason is required" });
+    }
+
+    const access = await getTimesheetPeriodAccess({
+      userId,
+      periodStart: period.periodStartKey,
+    });
+    if (!access.isExpired) {
+      return res.status(409).json({
+        message: "This timesheet period is not past the submission deadline",
+      });
+    }
+
+    const today = getThailandDateKey();
+    if (formatWorkDate(parsedReopenUntil) < today) {
+      return res.status(400).json({
+        message: "reopenUntil cannot be before today in Asia/Bangkok",
+      });
+    }
+
+    // Close only stale records so a new audit record can be created after expiry.
+    await TimesheetPeriodOverride.updateMany(
+      {
+        userId,
+        periodType: "week",
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
+        isActive: true,
+        reopenUntil: { $lt: parseWorkDate(today) },
+      },
+      { $set: { isActive: false, closedAt: new Date() } }
+    );
+
+    const activeOverride = await TimesheetPeriodOverride.exists({
+      userId,
+      periodType: "week",
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      isActive: true,
+    });
+    if (activeOverride) {
+      return res.status(409).json({
+        message: "An active reopen already exists for this timesheet period",
+      });
+    }
+
+    const override = await TimesheetPeriodOverride.create({
+      userId,
+      periodType: "week",
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      reopenedBy: req.user._id,
+      reopenedAt: new Date(),
+      reopenUntil: parsedReopenUntil,
+      reason: trimmedReason,
+      isActive: true,
+    });
+
+    return res.status(201).json({
+      message: "Timesheet period reopened successfully",
+      data: {
+        _id: override._id,
+        userId: String(override.userId),
+        periodStart: period.periodStartKey,
+        periodEnd: period.periodEndKey,
+        deadline: access.deadline,
+        reopenUntil: formatWorkDate(override.reopenUntil),
+        reason: override.reason,
+      },
+    });
+  } catch (error) {
+    console.error("reopenTimesheetPeriod error:", error);
+    if (isDuplicateKeyError(error)) {
+      return res.status(409).json({
+        message: "An active reopen already exists for this timesheet period",
+      });
+    }
+
+    return res.status(500).json({ message: "Failed to reopen timesheet period" });
+  }
+};
+
+exports.getAdminReopenStatus = async (req, res) => {
+  try {
+    if (!isAdmin(req.user)) {
+      return res.status(403).json({ message: "Admin access is required" });
+    }
+
+    const { userId, periodStart } = req.query;
+    if (!isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Valid userId is required" });
+    }
+
+    const targetUser = await User.findById(userId, "_id").lean();
+    if (!targetUser) {
+      return res.status(404).json({ message: "Target user not found" });
+    }
+
+    const access = await getTimesheetPeriodAccess({ userId, periodStart });
+    if (!access) {
+      return res.status(400).json({
+        message: "periodStart must be a valid Monday in YYYY-MM-DD format",
+      });
+    }
+
+    return res.status(200).json({
+      userId: String(userId),
+      periodStart: access.periodStart,
+      periodEnd: access.periodEnd,
+      deadline: access.deadline,
+      isExpired: access.isExpired,
+      isReopened: access.isReopened,
+      reopenUntil: access.reopenUntil,
+      reason: access.override?.reason || null,
+      reopenedAt: access.override?.reopenedAt || null,
+      reopenedBy: access.override?.reopenedBy
+        ? {
+            _id: String(access.override.reopenedBy._id),
+            username: access.override.reopenedBy.username,
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error("getAdminReopenStatus error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet reopen status" });
+  }
+};
+
+exports.getMyPeriodStatus = async (req, res) => {
+  try {
+    const access = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      periodStart: req.query.periodStart,
+    });
+    if (!access) {
+      return res.status(400).json({
+        message: "periodStart must be a valid Monday in YYYY-MM-DD format",
+      });
+    }
+
+    return res.status(200).json({
+      periodStart: access.periodStart,
+      periodEnd: access.periodEnd,
+      deadline: access.deadline,
+      isExpired: access.isExpired,
+      isReopened: access.isReopened,
+      reopenUntil: access.reopenUntil,
+      submissionStatus: access.submissionStatus,
+      canEdit: access.canEdit,
+      canSubmit: access.canSubmit,
+      lockReason: access.lockReason,
+    });
+  } catch (error) {
+    console.error("getMyPeriodStatus error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet period status" });
   }
 };
 
