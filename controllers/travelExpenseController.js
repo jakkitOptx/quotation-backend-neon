@@ -244,6 +244,7 @@ const createTravelExpenseLog = async ({
   await Log.create({
     travelExpenseId,
     resourceType: "travel-expense",
+    module: "travel_expense",
     action,
     performedBy,
     description: description || "",

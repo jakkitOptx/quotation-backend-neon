@@ -27,6 +27,7 @@ const {
 const {
   getTimesheetPeriodAccess,
 } = require("../services/timesheetPeriodAccessService");
+const { logTimesheetActivity } = require("../services/timesheetAuditService");
 
 const CLIENT_SELECT_FIELDS =
   "customerName companyBaseName email authorizedApprovers address taxIdentificationNumber contactPhoneNumber branchNo";
@@ -528,6 +529,14 @@ exports.createProject = async (req, res) => {
       normalizedName,
     });
 
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "project_created",
+      description: `Created Timesheet project "${project.name}"`,
+      entityId: project._id,
+      metadata: { clientId: String(project.clientId) },
+    });
+
     return res.status(201).json({
       message: "Project created successfully",
       data: project.toObject(),
@@ -580,9 +589,18 @@ exports.updateProject = async (req, res) => {
         .json({ message: "A project with this name already exists for this client" });
     }
 
+    const previousName = project.name;
     project.name = trimmedName;
     project.normalizedName = normalizedName;
     await project.save();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "project_renamed",
+      description: `Renamed Timesheet project from "${previousName}" to "${project.name}"`,
+      entityId: project._id,
+      metadata: { previousName, name: project.name, clientId: String(project.clientId) },
+    });
 
     return res.status(200).json({
       message: "Project updated successfully",
@@ -619,6 +637,14 @@ exports.deleteProject = async (req, res) => {
 
     project.isActive = false;
     await project.save();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "project_archived",
+      description: `Archived Timesheet project "${project.name}"`,
+      entityId: project._id,
+      metadata: { clientId: String(project.clientId) },
+    });
 
     return res.status(200).json({
       message: "Project archived successfully",
@@ -714,6 +740,14 @@ exports.createDetail = async (req, res) => {
       normalizedName,
     });
 
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "detail_created",
+      description: `Created Timesheet detail "${detail.name}"`,
+      entityId: detail._id,
+      metadata: { projectId: String(detail.projectId) },
+    });
+
     return res.status(201).json({
       message: "Detail created successfully",
       data: detail.toObject(),
@@ -766,9 +800,18 @@ exports.updateDetail = async (req, res) => {
         .json({ message: "A detail with this name already exists for this project" });
     }
 
+    const previousName = detail.name;
     detail.name = trimmedName;
     detail.normalizedName = normalizedName;
     await detail.save();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "detail_renamed",
+      description: `Renamed Timesheet detail from "${previousName}" to "${detail.name}"`,
+      entityId: detail._id,
+      metadata: { previousName, name: detail.name, projectId: String(detail.projectId) },
+    });
 
     return res.status(200).json({
       message: "Detail updated successfully",
@@ -805,6 +848,14 @@ exports.deleteDetail = async (req, res) => {
 
     detail.isActive = false;
     await detail.save();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "detail_archived",
+      description: `Archived Timesheet detail "${detail.name}"`,
+      entityId: detail._id,
+      metadata: { projectId: String(detail.projectId) },
+    });
 
     return res.status(200).json({
       message: "Detail archived successfully",
@@ -941,6 +992,14 @@ exports.createEntry = async (req, res) => {
       hours: parsedHours,
     });
 
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "entry_created",
+      description: `Created Timesheet entry of ${entry.hours} hours on ${formatWorkDate(entry.workDate)}`,
+      entityId: entry._id,
+      metadata: { detailId: String(entry.detailId), workDate: formatWorkDate(entry.workDate), hours: entry.hours },
+    });
+
     return res.status(201).json({
       message: "Timesheet entry created successfully",
       data: normalizeEntryOutput(entry.toObject()),
@@ -1034,12 +1093,25 @@ exports.updateEntry = async (req, res) => {
       });
     }
 
+    const previousEntry = {
+      hours: entry.hours,
+      workDate: formatWorkDate(entry.workDate),
+      detailId: String(entry.detailId),
+    };
     entry.clientId = nextClientId;
     entry.projectId = nextProjectId;
     entry.detailId = nextDetailId;
     entry.workDate = nextWorkDate;
     entry.hours = nextHours;
     await entry.save();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "entry_updated",
+      description: `Updated Timesheet entry from ${previousEntry.hours} to ${entry.hours} hours on ${formatWorkDate(entry.workDate)}`,
+      entityId: entry._id,
+      metadata: { previous: previousEntry, current: { hours: entry.hours, workDate: formatWorkDate(entry.workDate), detailId: String(entry.detailId) } },
+    });
 
     return res.status(200).json({
       message: "Timesheet entry updated successfully",
@@ -1082,7 +1154,20 @@ exports.deleteEntry = async (req, res) => {
       return respondPeriodAccessBlock(res, access);
     }
 
+    const deletedEntry = {
+      detailId: String(entry.detailId),
+      workDate: formatWorkDate(entry.workDate),
+      hours: entry.hours,
+    };
     await entry.deleteOne();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "entry_deleted",
+      description: `Deleted Timesheet entry of ${deletedEntry.hours} hours on ${deletedEntry.workDate}`,
+      entityId: entry._id,
+      metadata: deletedEntry,
+    });
 
     return res.status(200).json({ message: "Timesheet entry deleted successfully" });
   } catch (error) {
@@ -1156,6 +1241,14 @@ exports.createSubmission = async (req, res) => {
       currentApprovalLevel: approvalSteps[0].level,
       approvalSteps,
       submittedAt: new Date(),
+    });
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "submission_created",
+      description: `Submitted Timesheet for ${period.periodStartKey} - ${period.periodEndKey}`,
+      entityId: submission._id,
+      metadata: { periodStart: period.periodStartKey, periodEnd: period.periodEndKey, totalHours },
     });
 
     return res.status(201).json({
@@ -1262,6 +1355,14 @@ exports.reopenTimesheetPeriod = async (req, res) => {
       reopenUntil: parsedReopenUntil,
       reason: trimmedReason,
       isActive: true,
+    });
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "period_reopened",
+      description: `Reopened Timesheet period ${period.periodStartKey} - ${period.periodEndKey} until ${formatWorkDate(override.reopenUntil)}`,
+      entityId: override._id,
+      metadata: { userId: String(userId), periodStart: period.periodStartKey, periodEnd: period.periodEndKey, reopenUntil: formatWorkDate(override.reopenUntil), reason: override.reason },
     });
 
     return res.status(201).json({
@@ -1452,6 +1553,14 @@ exports.withdrawSubmission = async (req, res) => {
     submission.withdrawnAt = new Date();
     submission.currentApprovalLevel = null;
     await submission.save();
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "submission_withdrawn",
+      description: `Withdrew Timesheet submission for ${formatWorkDate(submission.periodStart)} - ${formatWorkDate(submission.periodEnd)}`,
+      entityId: submission._id,
+      metadata: { periodStart: formatWorkDate(submission.periodStart), periodEnd: formatWorkDate(submission.periodEnd) },
+    });
 
     return res.status(200).json({
       message: "Timesheet submission withdrawn successfully",
@@ -1654,6 +1763,23 @@ exports.approveSubmission = async (req, res) => {
       });
     }
 
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "submission_approved",
+      description: `Approved Timesheet at level ${current.step.level}`,
+      entityId: updated._id,
+      metadata: { periodStart: formatWorkDate(updated.periodStart), periodEnd: formatWorkDate(updated.periodEnd), level: current.step.level },
+    });
+    if (nextIndex === -1) {
+      await logTimesheetActivity({
+        actor: req.user.username,
+        action: "submission_fully_approved",
+        description: `Final approval completed for Timesheet ${formatWorkDate(updated.periodStart)} - ${formatWorkDate(updated.periodEnd)}`,
+        entityId: updated._id,
+        metadata: { periodStart: formatWorkDate(updated.periodStart), periodEnd: formatWorkDate(updated.periodEnd) },
+      });
+    }
+
     return res.status(200).json({
       message: "Timesheet submission approved successfully",
       data: buildSubmissionResponse(updated.toObject()),
@@ -1721,6 +1847,14 @@ exports.rejectSubmission = async (req, res) => {
         message: "This timesheet submission is no longer actionable",
       });
     }
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "submission_rejected",
+      description: `Rejected Timesheet: ${reason}`,
+      entityId: updated._id,
+      metadata: { periodStart: formatWorkDate(updated.periodStart), periodEnd: formatWorkDate(updated.periodEnd), reason },
+    });
 
     return res.status(200).json({
       message: "Timesheet submission rejected successfully",
