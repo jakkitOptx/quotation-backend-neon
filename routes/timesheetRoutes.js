@@ -40,6 +40,8 @@ router.post(
 router.get("/approvals", timesheetController.getApprovalInbox);
 router.get("/approvals/:id", timesheetController.getApprovalDetail);
 
+router.get("/capabilities", timesheetController.getTimesheetCapabilities);
+
 router.get("/dashboard/users", timesheetController.getDashboardUsers);
 router.get("/dashboard/summary", timesheetController.getDashboardSummary);
 router.get(

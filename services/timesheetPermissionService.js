@@ -7,6 +7,22 @@ const DASHBOARD_USER_SELECT =
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const canUserApproveTimesheets = async (viewer) => {
+  const username = normalizeEmail(viewer?.username);
+  if (!username) {
+    return false;
+  }
+
+  return Boolean(
+    await ApproveFlow.exists({
+      "approvalHierarchy.approver": {
+        $regex: `^${escapeRegex(username)}$`,
+        $options: "i",
+      },
+    })
+  );
+};
+
 const getViewerDashboardScope = async (viewer) => {
   if (!viewer?._id) {
     return {
@@ -139,6 +155,7 @@ const getVisibleDashboardUsers = async (viewer) => {
 
 module.exports = {
   DASHBOARD_USER_SELECT,
+  canUserApproveTimesheets,
   getViewerDashboardScope,
   canViewTimesheet,
   getVisibleDashboardUsers,

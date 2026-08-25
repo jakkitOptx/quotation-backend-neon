@@ -7,7 +7,9 @@ const TimesheetEntry = require("../models/TimesheetEntry");
 const TimesheetSubmission = require("../models/TimesheetSubmission");
 const ApproveFlow = require("../models/ApproveFlow");
 const {
+  canUserApproveTimesheets,
   canViewTimesheet,
+  getViewerDashboardScope,
   getVisibleDashboardUsers,
 } = require("../services/timesheetPermissionService");
 const {
@@ -1532,6 +1534,23 @@ exports.getDashboardUsers = async (req, res) => {
   } catch (error) {
     console.error("getDashboardUsers error:", error);
     return res.status(500).json({ message: "Failed to fetch dashboard users" });
+  }
+};
+
+exports.getTimesheetCapabilities = async (req, res) => {
+  try {
+    const [dashboardScope, canApproveTimesheet] = await Promise.all([
+      getViewerDashboardScope(req.user),
+      canUserApproveTimesheets(req.user),
+    ]);
+
+    return res.status(200).json({
+      canViewDashboard: dashboardScope.canViewDashboard,
+      canApproveTimesheet,
+    });
+  } catch (error) {
+    console.error("getTimesheetCapabilities error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet capabilities" });
   }
 };
 

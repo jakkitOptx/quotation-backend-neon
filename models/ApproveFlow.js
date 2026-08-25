@@ -13,6 +13,9 @@ const ApproveFlowSchema = new mongoose.Schema({
   ],
 });
 
+// Supports Timesheet dashboard and capability lookups by embedded approver.
+ApproveFlowSchema.index({ "approvalHierarchy.approver": 1 });
+
 module.exports =
   mongoose.models.ApproveFlow ||
   mongoose.model("ApproveFlow", ApproveFlowSchema);
