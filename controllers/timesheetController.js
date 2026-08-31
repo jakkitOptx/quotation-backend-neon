@@ -80,6 +80,10 @@ const SUBMISSION_STATUSES = ["pending", "approved", "rejected", "withdrawn"];
 
 const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const formatUserDisplayName = (user) =>
+  [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() ||
+  user?.username ||
+  "";
 
 const respondPeriodAccessBlock = (res, access) =>
   res.status(409).json({
@@ -248,6 +252,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
     { $unwind: "$client" },
     { $unwind: "$project" },
     { $unwind: "$detail" },
+    { $match: { "project.isActive": true, "detail.isActive": true } },
     {
       $group: {
         _id: {
@@ -257,6 +262,8 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
           detailId: "$detailId",
           workDate: "$workDate",
         },
+        firstName: { $first: "$user.firstName" },
+        lastName: { $first: "$user.lastName" },
         username: { $first: "$user.username" },
         department: { $first: "$user.department" },
         clientName: { $first: "$client.customerName" },
@@ -293,7 +300,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
     if (!usersMap.has(userKey)) {
       usersMap.set(userKey, {
         userId: item._id.userId,
-        username: item.username,
+        username: formatUserDisplayName(item),
         department: item.department || "",
         totalHours: 0,
         clients: [],
@@ -514,6 +521,7 @@ exports.createProject = async (req, res) => {
       userId: req.user._id,
       clientId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -581,6 +589,7 @@ exports.updateProject = async (req, res) => {
       userId: req.user._id,
       clientId: project.clientId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -725,6 +734,7 @@ exports.createDetail = async (req, res) => {
       userId: req.user._id,
       projectId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -792,6 +802,7 @@ exports.updateDetail = async (req, res) => {
       userId: req.user._id,
       projectId: detail.projectId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -919,14 +930,16 @@ exports.getEntries = async (req, res) => {
 
     return res.status(200).json({
       range: { from: range.from, to: range.to },
-      data: entries.map((entry) =>
-        normalizeEntryOutput({
-          ...entry,
-          client: entry.clientId,
-          project: entry.projectId,
-          detail: entry.detailId,
-        })
-      ),
+      data: entries
+        .filter((entry) => entry.projectId?.isActive && entry.detailId?.isActive)
+        .map((entry) =>
+          normalizeEntryOutput({
+            ...entry,
+            client: entry.clientId,
+            project: entry.projectId,
+            detail: entry.detailId,
+          })
+        ),
     });
   } catch (error) {
     console.error("getEntries error:", error);
@@ -1221,6 +1234,25 @@ exports.createSubmission = async (req, res) => {
           workDate: { $gte: period.periodStart, $lte: period.periodEnd },
         },
       },
+      {
+        $lookup: {
+          from: "timesheetprojects",
+          localField: "projectId",
+          foreignField: "_id",
+          as: "project",
+        },
+      },
+      {
+        $lookup: {
+          from: "timesheetdetails",
+          localField: "detailId",
+          foreignField: "_id",
+          as: "detail",
+        },
+      },
+      { $unwind: "$project" },
+      { $unwind: "$detail" },
+      { $match: { "project.isActive": true, "detail.isActive": true } },
       { $group: { _id: null, totalHours: { $sum: "$hours" } } },
     ]);
     const totalHours = Number((totals[0]?.totalHours || 0).toFixed(2));
@@ -1425,7 +1457,7 @@ exports.getAdminReopenStatus = async (req, res) => {
       reopenedBy: access.override?.reopenedBy
         ? {
             _id: String(access.override.reopenedBy._id),
-            username: access.override.reopenedBy.username,
+            username: formatUserDisplayName(access.override.reopenedBy),
           }
         : null,
     });
@@ -1616,7 +1648,7 @@ exports.getApprovalInbox = async (req, res) => {
     }
 
     const candidates = await TimesheetSubmission.find(query)
-      .populate("userId", "username department")
+      .populate("userId", "username firstName lastName department")
       .sort({ submittedAt: 1, createdAt: 1 })
       .lean();
     const submissions = candidates.filter((submission) => {
@@ -1631,7 +1663,7 @@ exports.getApprovalInbox = async (req, res) => {
         user: submission.userId
           ? {
               _id: submission.userId._id,
-              username: submission.userId.username,
+              username: formatUserDisplayName(submission.userId),
               department: submission.userId.department || "",
             }
           : null,
@@ -1669,7 +1701,7 @@ exports.getApprovalDetail = async (req, res) => {
 
     const submitter = await User.findById(
       submission.userId,
-      "_id username department"
+      "_id username firstName lastName department"
     ).lean();
     if (!submitter) {
       return res.status(404).json({ message: "Timesheet submitter not found" });
@@ -1685,7 +1717,7 @@ exports.getApprovalDetail = async (req, res) => {
       submission: buildSubmissionResponse(submission),
       user: {
         _id: submitter._id,
-        username: submitter.username,
+        username: formatUserDisplayName(submitter),
         department: submitter.department || "",
       },
       summary: {
@@ -1972,6 +2004,25 @@ exports.getDashboardSummary = async (req, res) => {
       { $match: match },
       {
         $lookup: {
+          from: "timesheetprojects",
+          localField: "projectId",
+          foreignField: "_id",
+          as: "project",
+        },
+      },
+      {
+        $lookup: {
+          from: "timesheetdetails",
+          localField: "detailId",
+          foreignField: "_id",
+          as: "detail",
+        },
+      },
+      { $unwind: "$project" },
+      { $unwind: "$detail" },
+      { $match: { "project.isActive": true, "detail.isActive": true } },
+      {
+        $lookup: {
           from: "users",
           localField: "userId",
           foreignField: "_id",
@@ -1982,6 +2033,8 @@ exports.getDashboardSummary = async (req, res) => {
       {
         $group: {
           _id: "$userId",
+          firstName: { $first: "$user.firstName" },
+          lastName: { $first: "$user.lastName" },
           username: { $first: "$user.username" },
           department: { $first: "$user.department" },
           totalHours: { $sum: "$hours" },
@@ -1998,7 +2051,7 @@ exports.getDashboardSummary = async (req, res) => {
       ),
       users: summary.map((item) => ({
         userId: item._id,
-        username: item.username,
+        username: formatUserDisplayName(item),
         department: item.department || "",
         totalHours: Number(Number(item.totalHours || 0).toFixed(2)),
       })),
@@ -2025,7 +2078,7 @@ exports.getDashboardUserSummary = async (req, res) => {
 
     const targetUser = await User.findById(
       userId,
-      "_id username department team teamGroup flow role"
+      "_id username firstName lastName department team teamGroup flow role"
     ).lean();
 
     if (!targetUser) {
@@ -2046,7 +2099,7 @@ exports.getDashboardUserSummary = async (req, res) => {
     return res.status(200).json({
       user: {
         _id: targetUser._id,
-        username: targetUser.username,
+        username: formatUserDisplayName(targetUser),
         department: targetUser.department || "",
       },
       range: { from: range.from, to: range.to },

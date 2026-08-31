@@ -6,6 +6,10 @@ const DASHBOARD_USER_SELECT =
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const formatUserDisplayName = (user) =>
+  [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() ||
+  user?.username ||
+  "";
 
 const canUserApproveTimesheets = async (viewer) => {
   const username = normalizeEmail(viewer?.username);
@@ -116,7 +120,7 @@ const getVisibleDashboardUsers = async (viewer) => {
   if (viewer?.role === "admin") {
     const users = await User.find(
       {},
-      "_id username department team teamGroup"
+      "_id username firstName lastName department team teamGroup"
     )
       .sort({ username: 1 })
       .lean();
@@ -124,7 +128,7 @@ const getVisibleDashboardUsers = async (viewer) => {
     return {
       canViewDashboard: true,
       scope: "all",
-      data: users,
+      data: users.map((user) => ({ ...user, username: formatUserDisplayName(user) })),
       visibleUserIds: scope.visibleUserIds,
     };
   }
@@ -140,7 +144,7 @@ const getVisibleDashboardUsers = async (viewer) => {
 
   const users = await User.find(
     { _id: { $in: scope.visibleUserIds } },
-    "_id username department team teamGroup"
+    "_id username firstName lastName department team teamGroup"
   )
     .sort({ username: 1 })
     .lean();
@@ -148,7 +152,7 @@ const getVisibleDashboardUsers = async (viewer) => {
   return {
     canViewDashboard: true,
     scope: "approver",
-    data: users,
+    data: users.map((user) => ({ ...user, username: formatUserDisplayName(user) })),
     visibleUserIds: users.map((user) => String(user._id)),
   };
 };
