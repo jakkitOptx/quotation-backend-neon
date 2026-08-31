@@ -248,6 +248,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
     { $unwind: "$client" },
     { $unwind: "$project" },
     { $unwind: "$detail" },
+    { $match: { "project.isActive": true, "detail.isActive": true } },
     {
       $group: {
         _id: {
@@ -514,6 +515,7 @@ exports.createProject = async (req, res) => {
       userId: req.user._id,
       clientId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -581,6 +583,7 @@ exports.updateProject = async (req, res) => {
       userId: req.user._id,
       clientId: project.clientId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -725,6 +728,7 @@ exports.createDetail = async (req, res) => {
       userId: req.user._id,
       projectId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -792,6 +796,7 @@ exports.updateDetail = async (req, res) => {
       userId: req.user._id,
       projectId: detail.projectId,
       normalizedName,
+      isActive: true,
     }).lean();
 
     if (duplicate) {
@@ -919,14 +924,16 @@ exports.getEntries = async (req, res) => {
 
     return res.status(200).json({
       range: { from: range.from, to: range.to },
-      data: entries.map((entry) =>
-        normalizeEntryOutput({
-          ...entry,
-          client: entry.clientId,
-          project: entry.projectId,
-          detail: entry.detailId,
-        })
-      ),
+      data: entries
+        .filter((entry) => entry.projectId?.isActive && entry.detailId?.isActive)
+        .map((entry) =>
+          normalizeEntryOutput({
+            ...entry,
+            client: entry.clientId,
+            project: entry.projectId,
+            detail: entry.detailId,
+          })
+        ),
     });
   } catch (error) {
     console.error("getEntries error:", error);
@@ -1221,6 +1228,25 @@ exports.createSubmission = async (req, res) => {
           workDate: { $gte: period.periodStart, $lte: period.periodEnd },
         },
       },
+      {
+        $lookup: {
+          from: "timesheetprojects",
+          localField: "projectId",
+          foreignField: "_id",
+          as: "project",
+        },
+      },
+      {
+        $lookup: {
+          from: "timesheetdetails",
+          localField: "detailId",
+          foreignField: "_id",
+          as: "detail",
+        },
+      },
+      { $unwind: "$project" },
+      { $unwind: "$detail" },
+      { $match: { "project.isActive": true, "detail.isActive": true } },
       { $group: { _id: null, totalHours: { $sum: "$hours" } } },
     ]);
     const totalHours = Number((totals[0]?.totalHours || 0).toFixed(2));
@@ -1970,6 +1996,25 @@ exports.getDashboardSummary = async (req, res) => {
 
     const summary = await TimesheetEntry.aggregate([
       { $match: match },
+      {
+        $lookup: {
+          from: "timesheetprojects",
+          localField: "projectId",
+          foreignField: "_id",
+          as: "project",
+        },
+      },
+      {
+        $lookup: {
+          from: "timesheetdetails",
+          localField: "detailId",
+          foreignField: "_id",
+          as: "detail",
+        },
+      },
+      { $unwind: "$project" },
+      { $unwind: "$detail" },
+      { $match: { "project.isActive": true, "detail.isActive": true } },
       {
         $lookup: {
           from: "users",

@@ -44,7 +44,7 @@ TimesheetProjectSchema.pre("validate", function (next) {
 
 TimesheetProjectSchema.index(
   { userId: 1, clientId: 1, normalizedName: 1 },
-  { unique: true }
+  { unique: true, partialFilterExpression: { isActive: true } }
 );
 
 module.exports = mongoose.model("TimesheetProject", TimesheetProjectSchema);

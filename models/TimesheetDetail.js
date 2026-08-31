@@ -44,7 +44,7 @@ TimesheetDetailSchema.pre("validate", function (next) {
 
 TimesheetDetailSchema.index(
   { userId: 1, projectId: 1, normalizedName: 1 },
-  { unique: true }
+  { unique: true, partialFilterExpression: { isActive: true } }
 );
 
 module.exports = mongoose.model("TimesheetDetail", TimesheetDetailSchema);
