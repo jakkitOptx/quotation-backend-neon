@@ -53,7 +53,7 @@ const getTimesheetPeriodAccess = async ({ userId, periodStart, workDate, now }) 
       reopenUntil: { $gte: todayDate },
     })
       .sort({ reopenedAt: -1 })
-      .populate("reopenedBy", "username")
+      .populate("reopenedBy", "username firstName lastName")
       .lean(),
   ]);
 
