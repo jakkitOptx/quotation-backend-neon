@@ -16,7 +16,6 @@ const {
 const {
   buildQuotationVisibilityQuery,
   canEditQuotation,
-  canApproveAcrossDepartments,
   canViewQuotation,
 } = require("../utils/quotationAccess");
 
@@ -610,12 +609,7 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
 
         const isRequesterStep =
           String(level.approver || "").trim().toLowerCase() === normalizedEmail;
-        if (isRequesterStep) return true;
-
-        return (
-          canApproveAcrossDepartments(user, qt) &&
-          Number(level.level || 0) <= Number(user.level || 0)
-        );
+        return isRequesterStep;
       });
 
       if (approverIndex === -1) return false; // ไม่มีอีเมลนี้ใน flow
