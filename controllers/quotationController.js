@@ -72,6 +72,24 @@ const buildYearQuery = (year) => {
   };
 };
 
+const parsePositiveInteger = (value, fallback) => {
+  const parsed = parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const roundQuotationFields = (quotation = {}) => ({
+  ...quotation,
+  amount: roundUp(quotation.amount),
+  discount: roundUp(quotation.discount),
+  fee: roundUp(quotation.fee),
+  calFee: roundUp(quotation.calFee),
+  totalBeforeFee: roundUp(quotation.totalBeforeFee),
+  total: roundUp(quotation.total),
+  amountBeforeTax: roundUp(quotation.amountBeforeTax),
+  vat: roundUp(quotation.vat),
+  netAmount: roundUp(quotation.netAmount),
+});
+
 const getRequestIpAddress = (req) => {
   const forwardedFor = req.headers["x-forwarded-for"];
   if (forwardedFor) {
@@ -536,6 +554,9 @@ exports.getQuotationsWithPagination = async (req, res) => {
 exports.getApprovalQuotationsByEmail = async (req, res) => {
   const { email } = req.params;
   const { year } = req.query;
+  const page = parsePositiveInteger(req.query.page, 1);
+  const limit = Math.min(parsePositiveInteger(req.query.limit, 20), 100);
+  const skip = (page - 1) * limit;
 
   try {
     if (!email) {
@@ -551,37 +572,30 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const selectedYear = year ? parseInt(year) : new Date().getFullYear();
-    const start = new Date(`${selectedYear}-01-01T00:00:00.000Z`);
-    const end = new Date(`${selectedYear + 1}-01-01T00:00:00.000Z`);
-
-    const quotations = await Quotation.find({
-      documentDate: { $gte: start, $lt: end }, // ✅ filter by year
-      approvalStatus: { $ne: "Draft" }, // ✅ ไม่เอา Draft
+    const candidateQuotations = await Quotation.find({
+      ...buildYearQuery(year),
+      approvalStatus: { $nin: ["Draft", "Canceled"] },
     })
       .sort({ createdAt: -1 })
       .select(
-        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department team teamGroup amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus reason remark CreditTerm approvalHierarchy"
-      )
-      .populate(
-        "clientId",
-        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
+        "_id department team teamGroup createdByUser approvalStatus approvalHierarchy createdAt"
       )
       .populate({
         path: "approvalHierarchy",
-        select: "quotationId approvalHierarchy",
+        select: "approvalHierarchy",
         populate: {
           path: "approvalHierarchy",
           select: "level approver status",
         },
-      });
+      })
+      .lean();
 
     // ✅ filter ที่ถึงคิว approver คนนี้เท่านั้น และไม่เอาใบที่ Canceled
-    const filteredQuotations = quotations.filter((qt) => {
+    const filteredQuotations = candidateQuotations.filter((qt) => {
       if (
         !qt.approvalHierarchy ||
         qt.approvalHierarchy.length === 0 ||
-        qt.approvalStatus === "Canceled" // ✅ เพิ่มตรงนี้
+        !canViewQuotation(user, qt)
       )
         return false;
 
@@ -609,21 +623,57 @@ exports.getApprovalQuotationsByEmail = async (req, res) => {
       return true;
     });
 
-    // ✅ ปัดเศษค่าตัวเลขก่อนส่งออก
-    const roundedQuotations = filteredQuotations.map((qt) => ({
-      ...qt.toObject(),
-      amount: roundUp(qt.amount),
-      discount: roundUp(qt.discount),
-      fee: roundUp(qt.fee),
-      calFee: roundUp(qt.calFee),
-      totalBeforeFee: roundUp(qt.totalBeforeFee),
-      total: roundUp(qt.total),
-      amountBeforeTax: roundUp(qt.amountBeforeTax),
-      vat: roundUp(qt.vat),
-      netAmount: roundUp(qt.netAmount),
-    }));
+    const total = filteredQuotations.length;
+    const pagedIds = filteredQuotations
+      .slice(skip, skip + limit)
+      .map((quotation) => quotation._id.toString());
 
-    res.status(200).json(roundedQuotations);
+    if (pagedIds.length === 0) {
+      return res.status(200).json({
+        data: [],
+        total,
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+        pageSize: limit,
+      });
+    }
+
+    const pagedQuotations = await Quotation.find({
+      _id: { $in: pagedIds },
+    })
+      .select(
+        "title client clientId salePerson documentDate productName projectName period startDate endDate createBy proposedBy createdByUser department team teamGroup amount discount fee calFee totalBeforeFee total amountBeforeTax vat netAmount type runNumber items approvalStatus reason remark CreditTerm approvalHierarchy"
+      )
+      .populate(
+        "clientId",
+        "customerName address taxIdentificationNumber contactPhoneNumber companyBaseName"
+      )
+      .populate({
+        path: "approvalHierarchy",
+        select: "quotationId approvalHierarchy",
+        populate: {
+          path: "approvalHierarchy",
+          select: "level approver status",
+        },
+      })
+      .lean();
+
+    const quotationMap = new Map(
+      pagedQuotations.map((quotation) => [quotation._id.toString(), quotation])
+    );
+
+    const orderedQuotations = pagedIds
+      .map((id) => quotationMap.get(id))
+      .filter(Boolean)
+      .map((quotation) => roundQuotationFields(quotation));
+
+    return res.status(200).json({
+      data: orderedQuotations,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
+      pageSize: limit,
+    });
   } catch (error) {
     console.error("Error fetching approval quotations:", error.message);
     res.status(500).json({ message: error.message });
