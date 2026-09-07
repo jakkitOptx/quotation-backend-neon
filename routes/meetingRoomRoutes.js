@@ -8,6 +8,7 @@ const authMiddleware = require("../middlewares/authMiddleware");
 const {
   getRooms,
   getBookings,
+  getTodayAvailability,
   createBooking,
   updateBooking,
   deleteBooking,
@@ -17,6 +18,7 @@ const {
 router.use(authMiddleware);
 
 router.get("/rooms", getRooms);
+router.get("/availability/today", getTodayAvailability);
 router.get("/bookings", getBookings);
 router.post("/bookings", createBooking);
 router.patch("/bookings/:id", updateBooking);
