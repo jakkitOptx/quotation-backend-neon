@@ -9,7 +9,137 @@ const timeToMin = (t) => {
   return h * 60 + m;
 };
 
+const pad2 = (n) => String(n).padStart(2, "0");
+const minToTime = (mins) =>
+  `${pad2(Math.floor(mins / 60))}:${pad2(mins % 60)}`;
+
 const isDateKey = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || "");
+
+const MEETING_ROOM_TIME_ZONE = "Asia/Bangkok";
+const WORK_PERIODS = [
+  { order: 1, key: "morning", label: "09:00 - 12:00", startMin: 9 * 60, endMin: 12 * 60 },
+  { order: 2, key: "afternoon", label: "13:00 - 18:00", startMin: 13 * 60, endMin: 18 * 60 },
+];
+const LUNCH_BREAK = {
+  key: "lunch",
+  label: "12:00 - 13:00",
+  startTime: "12:00",
+  endTime: "13:00",
+  startMin: 12 * 60,
+  endMin: 13 * 60,
+};
+const DAY_SORT_CONFIG = {
+  1: { dayName: "Monday", dayNameTh: "จันทร์", workMode: "office", dayOrder: 1 },
+  2: { dayName: "Tuesday", dayNameTh: "อังคาร", workMode: "office", dayOrder: 2 },
+  4: { dayName: "Thursday", dayNameTh: "พฤหัส", workMode: "office", dayOrder: 3 },
+  3: { dayName: "Wednesday", dayNameTh: "พุธ", workMode: "work_from_home", dayOrder: 4 },
+  5: { dayName: "Friday", dayNameTh: "ศุกร์", workMode: "work_from_home", dayOrder: 5 },
+  6: { dayName: "Saturday", dayNameTh: "เสาร์", workMode: "weekend", dayOrder: 6 },
+  0: { dayName: "Sunday", dayNameTh: "อาทิตย์", workMode: "weekend", dayOrder: 7 },
+};
+
+const getTodayDateKey = () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: MEETING_ROOM_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const getPart = (type) => parts.find((part) => part.type === type)?.value;
+  return `${getPart("year")}-${getPart("month")}-${getPart("day")}`;
+};
+
+const getCurrentTimeInfo = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: MEETING_ROOM_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+
+  const getPart = (type) => parts.find((part) => part.type === type)?.value;
+  const hour = Number(getPart("hour"));
+  const minute = Number(getPart("minute"));
+
+  return {
+    currentTime: `${pad2(hour)}:${pad2(minute)}`,
+    currentMin: hour * 60 + minute,
+    currentSlotStartMin: Math.floor((hour * 60 + minute) / 30) * 30,
+  };
+};
+
+const getDayInfo = (dateKey) => {
+  const [year, month, dayOfMonth] = dateKey.split("-").map(Number);
+  const day = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
+  return DAY_SORT_CONFIG[day];
+};
+
+const buildFreeSlots = (bookings, currentTimeInfo) => {
+  return WORK_PERIODS.flatMap((period) => {
+    const overlappingBookings = bookings
+      .filter(
+        (booking) =>
+          Number(booking.startMin) < period.endMin &&
+          Number(booking.endMin) > period.startMin
+      )
+      .map((booking) => ({
+        startMin: Math.max(Number(booking.startMin), period.startMin),
+        endMin: Math.min(Number(booking.endMin), period.endMin),
+      }))
+      .sort((a, b) => a.startMin - b.startMin);
+
+    const mergedBookings = overlappingBookings.reduce((merged, booking) => {
+      const previous = merged[merged.length - 1];
+      if (!previous || booking.startMin > previous.endMin) {
+        merged.push({ ...booking });
+        return merged;
+      }
+
+      previous.endMin = Math.max(previous.endMin, booking.endMin);
+      return merged;
+    }, []);
+
+    const freeSlots = [];
+    let cursor = period.startMin;
+
+    mergedBookings.forEach((booking) => {
+      if (cursor < booking.startMin) {
+        freeSlots.push({ startMin: cursor, endMin: booking.startMin });
+      }
+      cursor = Math.max(cursor, booking.endMin);
+    });
+
+    if (cursor < period.endMin) {
+      freeSlots.push({ startMin: cursor, endMin: period.endMin });
+    }
+
+    return freeSlots
+      .filter((slot) => slot.endMin > currentTimeInfo.currentMin)
+      .map((slot) => ({
+        ...slot,
+        startMin:
+          slot.startMin < currentTimeInfo.currentMin
+            ? Math.max(slot.startMin, currentTimeInfo.currentSlotStartMin)
+            : slot.startMin,
+      }))
+      .filter((slot) => slot.startMin < slot.endMin)
+      .map((slot, index) => ({
+        periodOrder: period.order,
+        period: period.key,
+        periodLabel: period.label,
+        slotOrder: index + 1,
+        startTime: minToTime(slot.startMin),
+        endTime: minToTime(slot.endMin),
+        startMin: slot.startMin,
+        endMin: slot.endMin,
+        label: `${minToTime(slot.startMin)} - ${minToTime(slot.endMin)}`,
+        isCurrentSlot:
+          slot.startMin <= currentTimeInfo.currentMin &&
+          currentTimeInfo.currentMin < slot.endMin,
+      }));
+  });
+};
 
 const buildBookingDateFilter = ({ dateKey, startDate, endDate }) => {
   if (dateKey) {
@@ -176,6 +306,104 @@ exports.getRooms = async (req, res) => {
     res
       .status(500)
       .json({ message: "Error fetching rooms", error: err.message });
+  }
+};
+
+exports.getTodayAvailability = async (req, res) => {
+  try {
+    await ensureDefaultRooms();
+
+    const dateKey = getTodayDateKey();
+    const dayInfo = getDayInfo(dateKey);
+    const currentTimeInfo = getCurrentTimeInfo();
+
+    if (dayInfo.workMode === "weekend") {
+      return res.json({
+        dateKey,
+        timezone: MEETING_ROOM_TIME_ZONE,
+        ...currentTimeInfo,
+        ...dayInfo,
+        isWorkingDay: false,
+        workPeriods: [],
+        lunchBreak: LUNCH_BREAK,
+        totalAvailableRooms: 0,
+        availableRooms: [],
+      });
+    }
+
+    const rooms = await MeetingRoom.find({
+      isActive: true,
+      isComingSoon: { $ne: true },
+    })
+      .sort({ sortOrder: 1, floor: 1, code: 1 })
+      .lean();
+
+    const bookings = await MeetingRoomBooking.find({
+      dateKey,
+      roomId: { $in: rooms.map((room) => room._id) },
+    })
+      .sort({ roomId: 1, startMin: 1 })
+      .lean();
+
+    const bookingsByRoomId = bookings.reduce((map, booking) => {
+      const roomId = String(booking.roomId);
+      if (!map.has(roomId)) map.set(roomId, []);
+      map.get(roomId).push(booking);
+      return map;
+    }, new Map());
+
+    const availableRooms = rooms
+      .map((room) => {
+        const roomBookings = bookingsByRoomId.get(String(room._id)) || [];
+        const availableSlots = buildFreeSlots(roomBookings, currentTimeInfo);
+
+        return {
+          room,
+          roomId: room._id,
+          roomCode: room.code,
+          roomName: room.name,
+          floor: room.floor,
+          capacity: room.capacity,
+          capacityLabel: room.capacityLabel,
+          availableSlots,
+        };
+      })
+      .filter((item) => item.availableSlots.length > 0)
+      .map((item, index) => ({
+        order: index + 1,
+        ...item,
+      }));
+
+    res.json({
+      dateKey,
+      timezone: MEETING_ROOM_TIME_ZONE,
+      ...currentTimeInfo,
+      ...dayInfo,
+      isWorkingDay: true,
+      workPeriods: WORK_PERIODS.map((period) => ({
+        order: period.order,
+        key: period.key,
+        label: period.label,
+        startTime: minToTime(period.startMin),
+        endTime: minToTime(period.endMin),
+        startMin: period.startMin,
+        endMin: period.endMin,
+      })),
+      lunchBreak: LUNCH_BREAK,
+      sortPolicy: {
+        dayOrder: ["Monday", "Tuesday", "Thursday", "Wednesday", "Friday"],
+        officeDaysFirst: true,
+        wfhDaysLast: true,
+        roomOrder: "sortOrder, floor, code",
+      },
+      totalAvailableRooms: availableRooms.length,
+      availableRooms,
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "Error fetching today's meeting room availability",
+      error: err.message,
+    });
   }
 };
 
