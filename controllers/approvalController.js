@@ -21,6 +21,12 @@ exports.createApprovalHierarchy = async (req, res) => {
     const quotation = await Quotation.findById(quotationId);
     if (!quotation) return res.status(404).json({ message: "Quotation not found" });
 
+    if (quotation.approvalStatus === "Draft") {
+      return res.status(409).json({
+        message: "Save the quotation as pending before confirming an approval flow",
+      });
+    }
+
     if (!quotation.createdByUser) {
       return res.status(400).json({
         message: "The Quotation does not have a createdByUser field defined.",
