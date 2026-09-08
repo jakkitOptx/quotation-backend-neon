@@ -62,10 +62,10 @@ const buildApprovalEmail = ({ quotation, detailUrl }) => {
       <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 12px 30px rgba(31,41,55,.12);">
         <div style="padding:28px 32px;background:#1f2937;color:#ffffff;">
           <div style="font-size:12px;letter-spacing:1.2px;color:${accentColor};font-weight:700;">${brandName}</div>
-          <h1 style="margin:10px 0 0;font-size:24px;line-height:1.3;">Quotation awaiting your approval</h1>
+          <h1 style="margin:10px 0 0;font-size:24px;line-height:1.3;">Quotation Ready for Your Approval</h1>
         </div>
         <div style="padding:30px 32px;">
-          <p style="margin:0 0 18px;font-size:16px;line-height:1.6;">A quotation is ready for your review and approval.</p>
+          <p style="margin:0 0 18px;font-size:16px;line-height:1.6;">Please review and approve the quotation below.</p>
           <div style="padding:18px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;">
             <div style="font-size:13px;color:#6b7280;margin-bottom:5px;">Quotation No.</div>
             <div style="font-size:18px;font-weight:700;color:#111827;margin-bottom:14px;">${escapeHtml(code)}</div>
@@ -87,7 +87,7 @@ const buildApprovalEmail = ({ quotation, detailUrl }) => {
   return {
     subject: `${brandName}: Approval required for ${code}`,
     html,
-    text: `Quotation awaiting your approval\n${code}\n${quotation?.title || "-"}\nReview: ${detailUrl}`,
+    text: `Quotation Ready for Your Approval\n${code}\n${quotation?.title || "-"}\nReview: ${detailUrl}`,
   };
 };
 
