@@ -8,6 +8,11 @@ const quotationController = require("../controllers/quotationController");
 const _ = require("lodash");
 const { canEditQuotation } = require("../utils/quotationAccess");
 const authMiddleware = require("../middlewares/authMiddleware"); // ✅ อย่าลืมใช้
+const handoverController = require("../controllers/handoverController");
+
+router.get("/:id/handover/defaults", authMiddleware, handoverController.defaults);
+router.get("/:id/handover", authMiddleware, handoverController.get);
+router.put("/:id/handover", authMiddleware, handoverController.save);
 
 // ✅ ฟังก์ชันปัดเศษให้เป็นทศนิยม 2 ตำแหน่ง
 const roundUp = (num) => {
