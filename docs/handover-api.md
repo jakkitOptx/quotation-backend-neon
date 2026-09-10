@@ -74,7 +74,14 @@
 
 ## การตั้งค่าและขอบเขต
 
-`config/handover.js` รวม mapping ที่ยืนยันแล้ว: `optx.co.th` → บริษัท ออพท์เอ็กซ์ จำกัด และ `M` → Media (ตามคำขอ แม้ PDF ตัวอย่างเขียน Biddable Media) ยังไม่พบ mapping ประเภทจาก frontend ใน repository นี้ จึงไม่เดาชื่อประเภทอื่นหรือ domain บริษัทอื่น หากไม่พบ mapping คืน 400 และต้องเติม config ก่อนใช้
+`config/handover.js` ใช้เฉพาะหนังสือส่งมอบงาน จึงไม่เปลี่ยน type หรือ label ของ API QT อื่น บริษัทผู้ออกหนังสือระบุจาก email ผู้ login: `optx.co.th` → OPTX และ `neonworks.co.th`/`neonworks.com` → NEON
+
+| บริษัท | Type → ประเภทงานในหนังสือส่งมอบงาน |
+|---|---|
+| NEON | `C` Creative, `G` General, `K` Kols, `M` Media, `P` Production, `S` Strategy, `V` Vertix |
+| OPTX | `M` Biddable Media, `S` SEO, `W` Website, `D` Database |
+
+ชนิดเดิมที่มี label ไม่ซ้ำกัน เช่น `D` → Database จะใช้เป็น fallback ได้ แม้ QT เก่ามี prefix/บริษัทไม่ตรง mapping ปัจจุบัน ส่วน `S` ไม่มี fallback เพราะ NEON คือ Strategy แต่ OPTX คือ SEO หากไม่พบ mapping คืน 400
 
 HTTP errors: 400 ข้อมูลไม่ถูกต้อง/client ไม่พบ/mapping ไม่รองรับ; 401/403 ตาม auth middleware; 403 ไม่มีสิทธิ์ QT; 404 QT หรือหนังสือไม่พบ; 409 QT ไม่ Approved หรือชน unique key ขณะสร้างพร้อมกัน (ให้ retry PUT)
 

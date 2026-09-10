@@ -1,4 +1,8 @@
-const { companiesByEmailDomain, workTypes } = require("../config/handover");
+const {
+  companiesByEmailDomain,
+  workTypesByCompany,
+  uniqueWorkTypes,
+} = require("../config/handover");
 
 const fail = (message) => { const error = new Error(message); error.status = 400; throw error; };
 const text = (value, field, max = 300) => {
@@ -53,15 +57,18 @@ function sourceFields(quotation, user) {
   const email = String(user.username || user.email || "").trim().toLowerCase();
   const issuerCompany = companiesByEmailDomain[email.split("@")[1]];
   if (!issuerCompany) fail("No handover company mapping configured for login email domain");
-  const workType = workTypes[quotation.type];
-  if (!workType) fail(`No handover work type mapping configured for ${quotation.type}`);
+  const quotationType = String(quotation.type || "").trim().toUpperCase();
+  const workType =
+    workTypesByCompany[issuerCompany.code]?.[quotationType] ||
+    uniqueWorkTypes[quotationType];
+  if (!workType) fail(`No handover work type mapping configured for ${quotationType || "(empty)"}`);
   const prefix = quotation.createdByUser?.includes("@optx") ? "OPTX" : "NW-QT";
   return {
     issuerCompany: { ...issuerCompany },
     projectName: quotation.projectName,
-    quotationType: quotation.type,
+    quotationType,
     workType,
-    quotationNumber: `${prefix}(${quotation.type})-${new Date(quotation.documentDate).getFullYear()}-${String(quotation.runNumber).padStart(3, "0")}`,
+    quotationNumber: `${prefix}(${quotationType})-${new Date(quotation.documentDate).getFullYear()}-${String(quotation.runNumber).padStart(3, "0")}`,
   };
 }
 
