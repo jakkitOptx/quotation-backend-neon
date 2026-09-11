@@ -952,7 +952,7 @@ exports.duplicateQuotation = async (req, res) => {
     const duplicatedPayload = {
       ...restOriginal,
       runNumber: newRunNumber,
-      approvalStatus: "Pending",
+      approvalStatus: "Draft",
       approvedBy: undefined,
       customerApproval: {
         status: "Not Sent",

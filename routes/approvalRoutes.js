@@ -9,6 +9,7 @@ router.post('/', authMiddleware, approvalController.createApprovalHierarchy);
 router.get('/:id', authMiddleware, approvalController.getApprovalHierarchy);
 router.patch('/:id', authMiddleware, approvalController.updateApprovalStatus);
 router.patch('/:id/approvers', authMiddleware, approvalController.updateApproverInLevel);
+router.post('/:id/notify-current', authMiddleware, approvalController.notifyCurrentApprover);
 router.get('/:id/status', authMiddleware, approvalController.getApprovalStatus);
 router.patch("/:id/reset",authMiddleware, approvalController.resetApprovalHierarchy);
 

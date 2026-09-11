@@ -5,6 +5,7 @@ const User = require("../models/User");
 const Log = require("../models/Log");
 const Notification = require("../models/Notification");
 const { canApproveAcrossDepartments } = require("../utils/quotationAccess");
+const { notifyCurrentApprover } = require("../services/approvalEmailService");
 
 // ✅ สร้าง Approval Hierarchy
 exports.createApprovalHierarchy = async (req, res) => {
@@ -20,6 +21,12 @@ exports.createApprovalHierarchy = async (req, res) => {
     const quotation = await Quotation.findById(quotationId);
     if (!quotation) return res.status(404).json({ message: "Quotation not found" });
 
+    if (quotation.approvalStatus === "Draft") {
+      return res.status(409).json({
+        message: "Save the quotation as pending before confirming an approval flow",
+      });
+    }
+
     if (!quotation.createdByUser) {
       return res.status(400).json({
         message: "The Quotation does not have a createdByUser field defined.",
@@ -31,6 +38,12 @@ exports.createApprovalHierarchy = async (req, res) => {
 
     quotation.approvalHierarchy.push(approval._id);
     await quotation.save();
+
+    try {
+      await notifyCurrentApprover({ approval, quotation });
+    } catch (emailError) {
+      console.error("Failed to notify the first approver:", emailError.message);
+    }
 
     res.status(201).json(approval);
   } catch (error) {
@@ -416,6 +429,14 @@ exports.updateApproverInLevel = async (req, res) => {
     await approval.save();
     await quotation.save();
 
+    if (status === "Approved") {
+      try {
+        await notifyCurrentApprover({ approval, quotation });
+      } catch (emailError) {
+        console.error("Failed to notify the next approver:", emailError.message);
+      }
+    }
+
     res.status(200).json({
       message: `Approval status updated to ${status} by ${actionBy} at level ${level}`,
       approval,
@@ -423,6 +444,27 @@ exports.updateApproverInLevel = async (req, res) => {
   } catch (error) {
     console.error("❌ Error updating approval:", error.message);
     res.status(500).json({ message: error.message });
+  }
+};
+
+// Admin-only retry endpoint for a current approval email that previously failed.
+exports.notifyCurrentApprover = async (req, res) => {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ message: "Admin only" });
+  }
+
+  try {
+    const approval = await Approval.findById(req.params.id);
+    if (!approval) return res.status(404).json({ message: "Approval not found" });
+
+    const quotation = await Quotation.findById(approval.quotationId);
+    if (!quotation) return res.status(404).json({ message: "Quotation not found" });
+
+    const result = await notifyCurrentApprover({ approval, quotation });
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Failed to send current approval email:", error.message);
+    return res.status(502).json({ message: "Unable to send approval email" });
   }
 };
 
