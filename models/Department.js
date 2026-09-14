@@ -2,6 +2,10 @@ const mongoose = require("mongoose");
 
 const DepartmentSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true }, // เช่น "Media"
+  details: {
+    type: [{ type: String, trim: true }],
+    default: [],
+  },
   createdAt: { type: Date, default: Date.now },
 });
 
