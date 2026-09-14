@@ -1,6 +1,9 @@
 // userController.js
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
+const {
+  enrichUsersWithDepartmentId,
+} = require("../utils/userDepartment");
 
 const USER_PROFILE_FIELDS = new Set(["firstName", "lastName", "nickname"]);
 const ADMIN_PROFILE_FIELDS = new Set([
@@ -27,15 +30,16 @@ exports.getAllUsers = async (req, res) => {
     const users = await User.find(
       {},
       USER_SELECT_FIELDS
-    );
+    ).lean();
+    const usersWithDepartmentId = await enrichUsersWithDepartmentId(users);
 
-    const usersWithCompany = users.map((user) => {
+    const usersWithCompany = usersWithDepartmentId.map((user) => {
       const domain = user.username.split("@")[1]?.split(".")[0];
       const company =
         domain === "neonworks" ? "Neon" : domain === "optx" ? "Optx" : "Unknown";
 
       return {
-        ...user._doc,
+        ...user,
         company,
       };
     });
@@ -52,7 +56,7 @@ exports.getUserById = async (req, res) => {
     const user = await User.findById(
       req.params.id,
       USER_SELECT_FIELDS
-    );
+    ).lean();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -61,7 +65,8 @@ exports.getUserById = async (req, res) => {
     const company =
       domain === "neonworks" ? "Neon" : domain === "optx" ? "Optx" : "Unknown";
 
-    res.status(200).json({ ...user._doc, company });
+    const [userWithDepartmentId] = await enrichUsersWithDepartmentId([user]);
+    res.status(200).json({ ...userWithDepartmentId, company });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -139,7 +144,11 @@ exports.updateUserProfile = async (req, res) => {
     if (teamRole !== undefined) user.teamRole = teamRole;
 
     await user.save();
-    res.status(200).json({ message: "User profile updated successfully", user });
+    const [userWithDepartmentId] = await enrichUsersWithDepartmentId([user]);
+    res.status(200).json({
+      message: "User profile updated successfully",
+      user: userWithDepartmentId,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

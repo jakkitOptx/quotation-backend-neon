@@ -5,6 +5,9 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const nodemailer = require("nodemailer");
 const connectDB = require("../config/db");
+const {
+  enrichUsersWithDepartmentId,
+} = require("../utils/userDepartment");
 
 // ลงทะเบียน (Register)
 exports.register = async (req, res) => {
@@ -83,6 +86,7 @@ exports.register = async (req, res) => {
 
     // ✅ ใช้ insertMany() เพื่อบันทึกทีเดียว
     const insertedUsers = await User.insertMany(usersToInsert);
+    const usersWithDepartmentId = await enrichUsersWithDepartmentId(insertedUsers);
 
     // ✅ สร้าง JWT Token สำหรับทุกคนที่สมัครใหม่
     const tokens = insertedUsers.map((user) =>
@@ -101,7 +105,7 @@ exports.register = async (req, res) => {
 
     res.status(201).json({
       message: "Users registered successfully",
-      users: insertedUsers.map((user) => ({
+      users: usersWithDepartmentId.map((user) => ({
         _id: user._id, // ✅ เพิ่มตรงนี้
         firstName: user.firstName,
         lastName: user.lastName,
@@ -110,6 +114,7 @@ exports.register = async (req, res) => {
         level: user.level,
         company: user.company,
         department: user.department,
+        departmentId: user.departmentId,
         position: user.position,
         role: user.role,
         flow: user.flow,
@@ -146,6 +151,8 @@ exports.login = async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
+    const [userWithDepartmentId] = await enrichUsersWithDepartmentId([user]);
+
     const token = jwt.sign(
       {
         userId: user._id,
@@ -155,6 +162,7 @@ exports.login = async (req, res) => {
         company: user.company,
         role: user.role,
         department: user.department,
+        departmentId: userWithDepartmentId.departmentId,
         position: user.position,
         flow: user.flow,
         team: user.team,
@@ -176,6 +184,7 @@ exports.login = async (req, res) => {
         level: user.level,
         company: user.company,
         department: user.department,
+        departmentId: userWithDepartmentId.departmentId,
         position: user.position,
         role: user.role,
         flow: user.flow,
