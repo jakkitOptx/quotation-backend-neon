@@ -30,7 +30,7 @@ const {
 const { logTimesheetActivity } = require("../services/timesheetAuditService");
 
 const CLIENT_SELECT_FIELDS =
-  "customerName companyBaseName email authorizedApprovers address taxIdentificationNumber contactPhoneNumber branchNo";
+  "customerName companyBaseName email authorizedApprovers projects address taxIdentificationNumber contactPhoneNumber branchNo";
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(value);
 

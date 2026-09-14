@@ -22,6 +22,10 @@ const ClientSchema = new mongoose.Schema({
       position: { type: String, trim: true, default: "" },
     },
   ],
+  projects: {
+    type: [{ type: String, trim: true }],
+    default: [],
+  },
   address: { type: String, required: true },
   taxIdentificationNumber: { type: String, required: true }, // เปลี่ยนเป็น String
   contactPhoneNumber: { type: String, required: true }, // เปลี่ยนเป็น String
