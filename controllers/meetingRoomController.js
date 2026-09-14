@@ -18,16 +18,9 @@ const isDateKey = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || "");
 const MEETING_ROOM_TIME_ZONE = "Asia/Bangkok";
 const WORK_PERIODS = [
   { order: 1, key: "morning", label: "09:00 - 12:00", startMin: 9 * 60, endMin: 12 * 60 },
-  { order: 2, key: "afternoon", label: "13:00 - 18:00", startMin: 13 * 60, endMin: 18 * 60 },
+  { order: 2, key: "midday", label: "12:00 - 13:00", startMin: 12 * 60, endMin: 13 * 60 },
+  { order: 3, key: "afternoon", label: "13:00 - 18:00", startMin: 13 * 60, endMin: 18 * 60 },
 ];
-const LUNCH_BREAK = {
-  key: "lunch",
-  label: "12:00 - 13:00",
-  startTime: "12:00",
-  endTime: "13:00",
-  startMin: 12 * 60,
-  endMin: 13 * 60,
-};
 const DAY_SORT_CONFIG = {
   1: { dayName: "Monday", dayNameTh: "จันทร์", workMode: "office", dayOrder: 1 },
   2: { dayName: "Tuesday", dayNameTh: "อังคาร", workMode: "office", dayOrder: 2 },
@@ -325,7 +318,7 @@ exports.getTodayAvailability = async (req, res) => {
         ...dayInfo,
         isWorkingDay: false,
         workPeriods: [],
-        lunchBreak: LUNCH_BREAK,
+        lunchBreak: null,
         totalAvailableRooms: 0,
         availableRooms: [],
       });
@@ -389,7 +382,7 @@ exports.getTodayAvailability = async (req, res) => {
         startMin: period.startMin,
         endMin: period.endMin,
       })),
-      lunchBreak: LUNCH_BREAK,
+      lunchBreak: null,
       sortPolicy: {
         dayOrder: ["Monday", "Tuesday", "Thursday", "Wednesday", "Friday"],
         officeDaysFirst: true,
