@@ -7,6 +7,18 @@ const normalizeScopedName = (value = "") =>
     .replace(/\s+/g, " ")
     .toLowerCase();
 
+const normalizeOptionalRemark = (value) => {
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return value.trim();
+};
+
 const parseDateOnly = (value) => {
   if (!DATE_ONLY_REGEX.test(String(value || ""))) {
     return null;
@@ -174,6 +186,7 @@ const getDeadlineDateKey = (periodEnd) => {
 
 module.exports = {
   normalizeScopedName,
+  normalizeOptionalRemark,
   parseDateRange,
   parseWorkDate,
   getWeeklyPeriod,

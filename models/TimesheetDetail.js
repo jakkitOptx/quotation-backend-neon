@@ -25,6 +25,11 @@ const TimesheetDetailSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    remark: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     isActive: {
       type: Boolean,
       default: true,

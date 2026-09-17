@@ -15,6 +15,7 @@ const {
 } = require("../services/timesheetPermissionService");
 const {
   normalizeScopedName,
+  normalizeOptionalRemark,
   parseDateRange,
   parseWorkDate,
   getWeeklyPeriod,
@@ -69,6 +70,7 @@ const buildProjectResponse = (project) => ({
 const buildDetailResponse = (detail) => ({
   ...detail,
   projectId: detail.projectId,
+  remark: detail.remark || "",
 });
 
 const TIMESHEET_ENTRY_DUPLICATE_MESSAGE =
@@ -269,6 +271,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
         clientName: { $first: "$client.customerName" },
         projectName: { $first: "$project.name" },
         detailName: { $first: "$detail.name" },
+        detailRemark: { $first: "$detail.remark" },
         dayHours: { $sum: "$hours" },
       },
     },
@@ -348,6 +351,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
       projectNode.detailMap.set(detailKey, {
         detailId: item._id.detailId,
         name: item.detailName,
+        remark: item.detailRemark || "",
         dailyHours,
         totalHours: 0,
       });
@@ -377,6 +381,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
         details: project.details.map((detail) => ({
           detailId: detail.detailId,
           name: detail.name,
+          remark: detail.remark || "",
           dailyHours: detail.dailyHours,
           totalHours: Number(detail.totalHours.toFixed(2)),
         })),
@@ -705,6 +710,7 @@ exports.createDetail = async (req, res) => {
   try {
     const { projectId } = req.params;
     const trimmedName = trimName(req.body.name);
+    const remark = normalizeOptionalRemark(req.body.remark);
 
     if (!isValidObjectId(projectId)) {
       return res.status(400).json({ message: "Invalid project id" });
@@ -712,6 +718,10 @@ exports.createDetail = async (req, res) => {
 
     if (!trimmedName) {
       return res.status(400).json({ message: "Detail name is required" });
+    }
+
+    if (remark === null) {
+      return res.status(400).json({ message: "Remark must be a string" });
     }
 
     const project = await TimesheetProject.findOne({
@@ -748,6 +758,7 @@ exports.createDetail = async (req, res) => {
       projectId,
       name: trimmedName,
       normalizedName,
+      remark,
     });
 
     await logTimesheetActivity({
@@ -755,7 +766,7 @@ exports.createDetail = async (req, res) => {
       action: "detail_created",
       description: `Created Timesheet detail "${detail.name}"`,
       entityId: detail._id,
-      metadata: { projectId: String(detail.projectId) },
+      metadata: { projectId: String(detail.projectId), remark: detail.remark },
     });
 
     return res.status(201).json({
@@ -777,14 +788,25 @@ exports.createDetail = async (req, res) => {
 exports.updateDetail = async (req, res) => {
   try {
     const { id } = req.params;
-    const trimmedName = trimName(req.body.name);
+    const hasName = Object.prototype.hasOwnProperty.call(req.body, "name");
+    const hasRemark = Object.prototype.hasOwnProperty.call(req.body, "remark");
+    const trimmedName = hasName ? trimName(req.body.name) : null;
+    const remark = hasRemark ? normalizeOptionalRemark(req.body.remark) : undefined;
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({ message: "Invalid detail id" });
     }
 
-    if (!trimmedName) {
+    if (!hasName && !hasRemark) {
+      return res.status(400).json({ message: "Name or remark is required" });
+    }
+
+    if (hasName && !trimmedName) {
       return res.status(400).json({ message: "Detail name is required" });
+    }
+
+    if (hasRemark && remark === null) {
+      return res.status(400).json({ message: "Remark must be a string" });
     }
 
     const detail = await TimesheetDetail.findOne({
@@ -796,14 +818,18 @@ exports.updateDetail = async (req, res) => {
       return res.status(404).json({ message: "Detail not found" });
     }
 
-    const normalizedName = normalizeScopedName(trimmedName);
-    const duplicate = await TimesheetDetail.findOne({
-      _id: { $ne: detail._id },
-      userId: req.user._id,
-      projectId: detail.projectId,
-      normalizedName,
-      isActive: true,
-    }).lean();
+    const normalizedName = hasName
+      ? normalizeScopedName(trimmedName)
+      : detail.normalizedName;
+    const duplicate = hasName
+      ? await TimesheetDetail.findOne({
+          _id: { $ne: detail._id },
+          userId: req.user._id,
+          projectId: detail.projectId,
+          normalizedName,
+          isActive: true,
+        }).lean()
+      : null;
 
     if (duplicate) {
       return res
@@ -812,16 +838,30 @@ exports.updateDetail = async (req, res) => {
     }
 
     const previousName = detail.name;
-    detail.name = trimmedName;
-    detail.normalizedName = normalizedName;
+    const previousRemark = detail.remark || "";
+    if (hasName) {
+      detail.name = trimmedName;
+      detail.normalizedName = normalizedName;
+    }
+    if (hasRemark) {
+      detail.remark = remark;
+    }
     await detail.save();
 
     await logTimesheetActivity({
       actor: req.user.username,
-      action: "detail_renamed",
-      description: `Renamed Timesheet detail from "${previousName}" to "${detail.name}"`,
+      action: hasName ? "detail_renamed" : "detail_remark_updated",
+      description: hasName
+        ? `Renamed Timesheet detail from "${previousName}" to "${detail.name}"`
+        : `Updated remark for Timesheet detail "${detail.name}"`,
       entityId: detail._id,
-      metadata: { previousName, name: detail.name, projectId: String(detail.projectId) },
+      metadata: {
+        previousName,
+        name: detail.name,
+        previousRemark,
+        remark: detail.remark || "",
+        projectId: String(detail.projectId),
+      },
     });
 
     return res.status(200).json({
