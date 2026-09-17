@@ -20,12 +20,6 @@ const TimesheetEntrySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    detailId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "TimesheetDetail",
-      required: true,
-      index: true,
-    },
     workDate: {
       type: Date,
       required: true,
@@ -50,9 +44,8 @@ const TimesheetEntrySchema = new mongoose.Schema(
 
 TimesheetEntrySchema.index({ userId: 1, workDate: 1 });
 TimesheetEntrySchema.index({ userId: 1, clientId: 1, workDate: 1 });
-TimesheetEntrySchema.index({ userId: 1, projectId: 1, workDate: 1 });
 TimesheetEntrySchema.index(
-  { userId: 1, detailId: 1, workDate: 1 },
+  { userId: 1, projectId: 1, workDate: 1 },
   { unique: true }
 );
 

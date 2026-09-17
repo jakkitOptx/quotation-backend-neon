@@ -15,6 +15,7 @@ const {
 } = require("../services/timesheetPermissionService");
 const {
   normalizeScopedName,
+  normalizeOptionalRemark,
   parseDateRange,
   parseWorkDate,
   getWeeklyPeriod,
@@ -64,6 +65,7 @@ const normalizeEntryOutput = (entry) => ({
 const buildProjectResponse = (project) => ({
   ...project,
   clientId: project.clientId,
+  remark: project.remark || "",
 });
 
 const buildDetailResponse = (detail) => ({
@@ -72,7 +74,7 @@ const buildDetailResponse = (detail) => ({
 });
 
 const TIMESHEET_ENTRY_DUPLICATE_MESSAGE =
-  "A timesheet entry already exists for this detail and date";
+  "A timesheet entry already exists for this project and date";
 const TIMESHEET_PERIOD_LOCKED_MESSAGE = "This timesheet period is locked";
 const TIMESHEET_PERIOD_DEADLINE_MESSAGE =
   "This timesheet period is past the submission deadline";
@@ -240,26 +242,16 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
         as: "project",
       },
     },
-    {
-      $lookup: {
-        from: "timesheetdetails",
-        localField: "detailId",
-        foreignField: "_id",
-        as: "detail",
-      },
-    },
     { $unwind: "$user" },
     { $unwind: "$client" },
     { $unwind: "$project" },
-    { $unwind: "$detail" },
-    { $match: { "project.isActive": true, "detail.isActive": true } },
+    { $match: { "project.isActive": true } },
     {
       $group: {
         _id: {
           userId: "$userId",
           clientId: "$clientId",
           projectId: "$projectId",
-          detailId: "$detailId",
           workDate: "$workDate",
         },
         firstName: { $first: "$user.firstName" },
@@ -268,7 +260,7 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
         department: { $first: "$user.department" },
         clientName: { $first: "$client.customerName" },
         projectName: { $first: "$project.name" },
-        detailName: { $first: "$detail.name" },
+        projectRemark: { $first: "$project.remark" },
         dayHours: { $sum: "$hours" },
       },
     },
@@ -277,7 +269,6 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
         username: 1,
         clientName: 1,
         projectName: 1,
-        detailName: 1,
         "_id.workDate": 1,
       },
     },
@@ -294,7 +285,6 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
     const userKey = String(item._id.userId);
     const clientKey = String(item._id.clientId);
     const projectKey = String(item._id.projectId);
-    const detailKey = String(item._id.detailId);
     const workDateKey = formatWorkDate(item._id.workDate);
 
     if (!usersMap.has(userKey)) {
@@ -326,39 +316,26 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
     clientNode.totalHours += item.dayHours;
 
     if (!clientNode.projectMap.has(projectKey)) {
-      clientNode.projectMap.set(projectKey, {
-        projectId: item._id.projectId,
-        name: item.projectName,
-        totalHours: 0,
-        details: [],
-        detailMap: new Map(),
-      });
-      clientNode.projects.push(clientNode.projectMap.get(projectKey));
-    }
-
-    const projectNode = clientNode.projectMap.get(projectKey);
-    projectNode.totalHours += item.dayHours;
-
-    if (!projectNode.detailMap.has(detailKey)) {
       const dailyHours = {};
       dailyKeys.forEach((key) => {
         dailyHours[key] = 0;
       });
 
-      projectNode.detailMap.set(detailKey, {
-        detailId: item._id.detailId,
-        name: item.detailName,
+      clientNode.projectMap.set(projectKey, {
+        projectId: item._id.projectId,
+        name: item.projectName,
+        remark: item.projectRemark || "",
         dailyHours,
         totalHours: 0,
       });
-      projectNode.details.push(projectNode.detailMap.get(detailKey));
+      clientNode.projects.push(clientNode.projectMap.get(projectKey));
     }
 
-    const detailNode = projectNode.detailMap.get(detailKey);
-    detailNode.dailyHours[workDateKey] = Number(
-      (detailNode.dailyHours[workDateKey] + item.dayHours).toFixed(2)
+    const projectNode = clientNode.projectMap.get(projectKey);
+    projectNode.dailyHours[workDateKey] = Number(
+      (projectNode.dailyHours[workDateKey] + item.dayHours).toFixed(2)
     );
-    detailNode.totalHours += item.dayHours;
+    projectNode.totalHours += item.dayHours;
   });
 
   const users = Array.from(usersMap.values()).map((user) => ({
@@ -373,13 +350,9 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
       projects: client.projects.map((project) => ({
         projectId: project.projectId,
         name: project.name,
+        remark: project.remark || "",
+        dailyHours: project.dailyHours,
         totalHours: Number(project.totalHours.toFixed(2)),
-        details: project.details.map((detail) => ({
-          detailId: detail.detailId,
-          name: detail.name,
-          dailyHours: detail.dailyHours,
-          totalHours: Number(detail.totalHours.toFixed(2)),
-        })),
       })),
     })),
   }));
@@ -413,14 +386,11 @@ const ensureClientExists = async (clientId) => {
   return null;
 };
 
-const validateHierarchy = async ({ userId, clientId, projectId, detailId }) => {
-  const [client, project, detail] = await Promise.all([
+const validateHierarchy = async ({ userId, clientId, projectId }) => {
+  const [client, project] = await Promise.all([
     Client.findById(clientId).select("_id").lean(),
     TimesheetProject.findOne({ _id: projectId, userId })
       .select("_id clientId isActive")
-      .lean(),
-    TimesheetDetail.findOne({ _id: detailId, userId })
-      .select("_id projectId isActive")
       .lean(),
   ]);
 
@@ -440,30 +410,18 @@ const validateHierarchy = async ({ userId, clientId, projectId, detailId }) => {
     return { status: 400, message: "Selected project is archived" };
   }
 
-  if (!detail) {
-    return { status: 400, message: "Selected detail was not found" };
-  }
-
-  if (String(detail.projectId) !== String(projectId)) {
-    return { status: 400, message: "Detail does not belong to the selected project" };
-  }
-
-  if (!detail.isActive) {
-    return { status: 400, message: "Selected detail is archived" };
-  }
-
   return null;
 };
 
 const findEntryCollision = async ({
   userId,
-  detailId,
+  projectId,
   workDate,
   excludeEntryId = null,
 }) => {
   const query = {
     userId,
-    detailId,
+    projectId,
     workDate,
   };
 
@@ -502,6 +460,7 @@ exports.createProject = async (req, res) => {
   try {
     const { clientId, name } = req.body;
     const trimmedName = trimName(name);
+    const remark = normalizeOptionalRemark(req.body.remark);
 
     if (!isValidObjectId(clientId)) {
       return res.status(400).json({ message: "Valid clientId is required" });
@@ -509,6 +468,10 @@ exports.createProject = async (req, res) => {
 
     if (!trimmedName) {
       return res.status(400).json({ message: "Project name is required" });
+    }
+
+    if (remark === null) {
+      return res.status(400).json({ message: "Remark must be a string" });
     }
 
     const clientError = await ensureClientExists(clientId);
@@ -535,6 +498,7 @@ exports.createProject = async (req, res) => {
       clientId,
       name: trimmedName,
       normalizedName,
+      remark,
     });
 
     await logTimesheetActivity({
@@ -542,7 +506,7 @@ exports.createProject = async (req, res) => {
       action: "project_created",
       description: `Created Timesheet project "${project.name}"`,
       entityId: project._id,
-      metadata: { clientId: String(project.clientId) },
+      metadata: { clientId: String(project.clientId), remark: project.remark },
     });
 
     return res.status(201).json({
@@ -564,14 +528,25 @@ exports.createProject = async (req, res) => {
 exports.updateProject = async (req, res) => {
   try {
     const { id } = req.params;
-    const trimmedName = trimName(req.body.name);
+    const hasName = Object.prototype.hasOwnProperty.call(req.body, "name");
+    const hasRemark = Object.prototype.hasOwnProperty.call(req.body, "remark");
+    const trimmedName = hasName ? trimName(req.body.name) : null;
+    const remark = hasRemark ? normalizeOptionalRemark(req.body.remark) : undefined;
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({ message: "Invalid project id" });
     }
 
-    if (!trimmedName) {
+    if (!hasName && !hasRemark) {
+      return res.status(400).json({ message: "Name or remark is required" });
+    }
+
+    if (hasName && !trimmedName) {
       return res.status(400).json({ message: "Project name is required" });
+    }
+
+    if (hasRemark && remark === null) {
+      return res.status(400).json({ message: "Remark must be a string" });
     }
 
     const project = await TimesheetProject.findOne({
@@ -583,14 +558,18 @@ exports.updateProject = async (req, res) => {
       return res.status(404).json({ message: "Project not found" });
     }
 
-    const normalizedName = normalizeScopedName(trimmedName);
-    const duplicate = await TimesheetProject.findOne({
-      _id: { $ne: project._id },
-      userId: req.user._id,
-      clientId: project.clientId,
-      normalizedName,
-      isActive: true,
-    }).lean();
+    const normalizedName = hasName
+      ? normalizeScopedName(trimmedName)
+      : project.normalizedName;
+    const duplicate = hasName
+      ? await TimesheetProject.findOne({
+          _id: { $ne: project._id },
+          userId: req.user._id,
+          clientId: project.clientId,
+          normalizedName,
+          isActive: true,
+        }).lean()
+      : null;
 
     if (duplicate) {
       return res
@@ -599,16 +578,30 @@ exports.updateProject = async (req, res) => {
     }
 
     const previousName = project.name;
-    project.name = trimmedName;
-    project.normalizedName = normalizedName;
+    const previousRemark = project.remark || "";
+    if (hasName) {
+      project.name = trimmedName;
+      project.normalizedName = normalizedName;
+    }
+    if (hasRemark) {
+      project.remark = remark;
+    }
     await project.save();
 
     await logTimesheetActivity({
       actor: req.user.username,
-      action: "project_renamed",
-      description: `Renamed Timesheet project from "${previousName}" to "${project.name}"`,
+      action: hasName ? "project_renamed" : "project_remark_updated",
+      description: hasName
+        ? `Renamed Timesheet project from "${previousName}" to "${project.name}"`
+        : `Updated remark for Timesheet project "${project.name}"`,
       entityId: project._id,
-      metadata: { previousName, name: project.name, clientId: String(project.clientId) },
+      metadata: {
+        previousName,
+        name: project.name,
+        previousRemark,
+        remark: project.remark || "",
+        clientId: String(project.clientId),
+      },
     });
 
     return res.status(200).json({
@@ -880,7 +873,7 @@ exports.deleteDetail = async (req, res) => {
 
 exports.getEntries = async (req, res) => {
   try {
-    const { from, to, clientId, projectId, detailId } = req.query;
+    const { from, to, clientId, projectId } = req.query;
     const range = parseDateRange(from, to);
 
     if (!range) {
@@ -911,33 +904,23 @@ exports.getEntries = async (req, res) => {
       query.projectId = projectId;
     }
 
-    if (detailId !== undefined) {
-      if (!isValidObjectId(detailId)) {
-        return res.status(400).json({ message: "Invalid detailId" });
-      }
-
-      query.detailId = detailId;
-    }
-
     // We store workDate as Thailand local midnight converted to UTC so date-range
     // filtering also uses Thailand midnight boundaries and avoids day-shift bugs.
     const entries = await TimesheetEntry.find(query)
       .sort({ workDate: 1, createdAt: 1 })
       .populate("clientId", CLIENT_SELECT_FIELDS)
       .populate("projectId", "name clientId isActive")
-      .populate("detailId", "name projectId isActive")
       .lean();
 
     return res.status(200).json({
       range: { from: range.from, to: range.to },
       data: entries
-        .filter((entry) => entry.projectId?.isActive && entry.detailId?.isActive)
+        .filter((entry) => entry.projectId?.isActive)
         .map((entry) =>
           normalizeEntryOutput({
             ...entry,
             client: entry.clientId,
             project: entry.projectId,
-            detail: entry.detailId,
           })
         ),
     });
@@ -949,10 +932,10 @@ exports.getEntries = async (req, res) => {
 
 exports.createEntry = async (req, res) => {
   try {
-    const { clientId, projectId, detailId, workDate, hours } = req.body;
+    const { clientId, projectId, workDate, hours } = req.body;
 
-    if (![clientId, projectId, detailId].every(isValidObjectId)) {
-      return res.status(400).json({ message: "Valid clientId, projectId and detailId are required" });
+    if (![clientId, projectId].every(isValidObjectId)) {
+      return res.status(400).json({ message: "Valid clientId and projectId are required" });
     }
 
     const parsedHours = parseHours(hours);
@@ -977,7 +960,6 @@ exports.createEntry = async (req, res) => {
       userId: req.user._id,
       clientId,
       projectId,
-      detailId,
     });
 
     if (hierarchyError) {
@@ -986,7 +968,7 @@ exports.createEntry = async (req, res) => {
 
     const duplicate = await findEntryCollision({
       userId: req.user._id,
-      detailId,
+      projectId,
       workDate: parsedWorkDate,
     });
 
@@ -1000,7 +982,6 @@ exports.createEntry = async (req, res) => {
       userId: req.user._id,
       clientId,
       projectId,
-      detailId,
       workDate: parsedWorkDate,
       hours: parsedHours,
     });
@@ -1010,7 +991,7 @@ exports.createEntry = async (req, res) => {
       action: "entry_created",
       description: `Created Timesheet entry of ${entry.hours} hours on ${formatWorkDate(entry.workDate)}`,
       entityId: entry._id,
-      metadata: { detailId: String(entry.detailId), workDate: formatWorkDate(entry.workDate), hours: entry.hours },
+      metadata: { projectId: String(entry.projectId), workDate: formatWorkDate(entry.workDate), hours: entry.hours },
     });
 
     return res.status(201).json({
@@ -1049,10 +1030,9 @@ exports.updateEntry = async (req, res) => {
     const nextClientId = req.body.clientId !== undefined ? req.body.clientId : String(entry.clientId);
     const nextProjectId =
       req.body.projectId !== undefined ? req.body.projectId : String(entry.projectId);
-    const nextDetailId = req.body.detailId !== undefined ? req.body.detailId : String(entry.detailId);
 
-    if (![nextClientId, nextProjectId, nextDetailId].every(isValidObjectId)) {
-      return res.status(400).json({ message: "Valid clientId, projectId and detailId are required" });
+    if (![nextClientId, nextProjectId].every(isValidObjectId)) {
+      return res.status(400).json({ message: "Valid clientId and projectId are required" });
     }
 
     const nextHours = req.body.hours !== undefined ? parseHours(req.body.hours) : entry.hours;
@@ -1086,7 +1066,6 @@ exports.updateEntry = async (req, res) => {
       userId: req.user._id,
       clientId: nextClientId,
       projectId: nextProjectId,
-      detailId: nextDetailId,
     });
 
     if (hierarchyError) {
@@ -1095,7 +1074,7 @@ exports.updateEntry = async (req, res) => {
 
     const duplicate = await findEntryCollision({
       userId: req.user._id,
-      detailId: nextDetailId,
+      projectId: nextProjectId,
       workDate: nextWorkDate,
       excludeEntryId: entry._id,
     });
@@ -1109,11 +1088,10 @@ exports.updateEntry = async (req, res) => {
     const previousEntry = {
       hours: entry.hours,
       workDate: formatWorkDate(entry.workDate),
-      detailId: String(entry.detailId),
+      projectId: String(entry.projectId),
     };
     entry.clientId = nextClientId;
     entry.projectId = nextProjectId;
-    entry.detailId = nextDetailId;
     entry.workDate = nextWorkDate;
     entry.hours = nextHours;
     await entry.save();
@@ -1123,7 +1101,7 @@ exports.updateEntry = async (req, res) => {
       action: "entry_updated",
       description: `Updated Timesheet entry from ${previousEntry.hours} to ${entry.hours} hours on ${formatWorkDate(entry.workDate)}`,
       entityId: entry._id,
-      metadata: { previous: previousEntry, current: { hours: entry.hours, workDate: formatWorkDate(entry.workDate), detailId: String(entry.detailId) } },
+      metadata: { previous: previousEntry, current: { hours: entry.hours, workDate: formatWorkDate(entry.workDate), projectId: String(entry.projectId) } },
     });
 
     return res.status(200).json({
@@ -1168,7 +1146,7 @@ exports.deleteEntry = async (req, res) => {
     }
 
     const deletedEntry = {
-      detailId: String(entry.detailId),
+      projectId: String(entry.projectId),
       workDate: formatWorkDate(entry.workDate),
       hours: entry.hours,
     };
@@ -1242,17 +1220,8 @@ exports.createSubmission = async (req, res) => {
           as: "project",
         },
       },
-      {
-        $lookup: {
-          from: "timesheetdetails",
-          localField: "detailId",
-          foreignField: "_id",
-          as: "detail",
-        },
-      },
       { $unwind: "$project" },
-      { $unwind: "$detail" },
-      { $match: { "project.isActive": true, "detail.isActive": true } },
+      { $match: { "project.isActive": true } },
       { $group: { _id: null, totalHours: { $sum: "$hours" } } },
     ]);
     const totalHours = Number((totals[0]?.totalHours || 0).toFixed(2));
@@ -2010,17 +1979,8 @@ exports.getDashboardSummary = async (req, res) => {
           as: "project",
         },
       },
-      {
-        $lookup: {
-          from: "timesheetdetails",
-          localField: "detailId",
-          foreignField: "_id",
-          as: "detail",
-        },
-      },
       { $unwind: "$project" },
-      { $unwind: "$detail" },
-      { $match: { "project.isActive": true, "detail.isActive": true } },
+      { $match: { "project.isActive": true } },
       {
         $lookup: {
           from: "users",
