@@ -1054,8 +1054,30 @@ exports.createEntry = async (req, res) => {
     });
 
     if (duplicate) {
-      return res.status(409).json({
-        message: TIMESHEET_ENTRY_DUPLICATE_MESSAGE,
+      const entry = await TimesheetEntry.findOneAndUpdate(
+        { _id: duplicate._id, userId: req.user._id },
+        { $set: { clientId, hours: parsedHours } },
+        { new: true, runValidators: true }
+      );
+
+      await logTimesheetActivity({
+        actor: req.user.username,
+        action: "entry_updated",
+        description: `Updated existing Timesheet entry to ${entry.hours} hours on ${formatWorkDate(entry.workDate)}`,
+        entityId: entry._id,
+        metadata: {
+          projectId: String(entry.projectId),
+          workDate: formatWorkDate(entry.workDate),
+          hours: entry.hours,
+          source: "create_entry_reuse",
+        },
+      });
+
+      return res.status(200).json({
+        message: "Timesheet entry updated successfully",
+        reused: true,
+        updated: true,
+        data: normalizeEntryOutput(entry.toObject()),
       });
     }
 
