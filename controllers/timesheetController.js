@@ -386,6 +386,21 @@ const ensureClientExists = async (clientId) => {
   return null;
 };
 
+const findActiveProjectByName = ({ userId, clientId, normalizedName }) =>
+  TimesheetProject.findOne({
+    userId,
+    clientId,
+    normalizedName,
+    isActive: true,
+  }).lean();
+
+const respondWithReusableProject = (res, project) =>
+  res.status(200).json({
+    message: "Project ready to use",
+    reused: true,
+    data: buildProjectResponse(project),
+  });
+
 const validateHierarchy = async ({ userId, clientId, projectId }) => {
   const [client, project] = await Promise.all([
     Client.findById(clientId).select("_id").lean(),
@@ -480,17 +495,14 @@ exports.createProject = async (req, res) => {
     }
 
     const normalizedName = normalizeScopedName(trimmedName);
-    const duplicate = await TimesheetProject.findOne({
+    const duplicate = await findActiveProjectByName({
       userId: req.user._id,
       clientId,
       normalizedName,
-      isActive: true,
-    }).lean();
+    });
 
     if (duplicate) {
-      return res
-        .status(409)
-        .json({ message: "A project with this name already exists for this client" });
+      return respondWithReusableProject(res, duplicate);
     }
 
     const project = await TimesheetProject.create({
@@ -511,11 +523,28 @@ exports.createProject = async (req, res) => {
 
     return res.status(201).json({
       message: "Project created successfully",
+      reused: false,
       data: project.toObject(),
     });
   } catch (error) {
     console.error("createProject error:", error);
     if (isDuplicateKeyError(error)) {
+      try {
+        const clientId = req.body?.clientId;
+        const normalizedName = normalizeScopedName(trimName(req.body?.name));
+        const existingProject = await findActiveProjectByName({
+          userId: req.user._id,
+          clientId,
+          normalizedName,
+        });
+
+        if (existingProject) {
+          return respondWithReusableProject(res, existingProject);
+        }
+      } catch (lookupError) {
+        console.error("createProject duplicate lookup error:", lookupError);
+      }
+
       return res
         .status(409)
         .json({ message: "A project with this name already exists for this client" });
