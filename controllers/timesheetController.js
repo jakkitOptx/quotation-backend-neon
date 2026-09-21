@@ -394,6 +394,30 @@ const findActiveProjectByName = ({ userId, clientId, normalizedName }) =>
     isActive: true,
   }).lean();
 
+const reactivateArchivedProjectByName = ({
+  userId,
+  clientId,
+  normalizedName,
+  name,
+  remark,
+}) =>
+  TimesheetProject.findOneAndUpdate(
+    {
+      userId,
+      clientId,
+      normalizedName,
+      isActive: false,
+    },
+    {
+      $set: {
+        name,
+        remark,
+        isActive: true,
+      },
+    },
+    { new: true }
+  ).lean();
+
 const respondWithReusableProject = (res, project) =>
   res.status(200).json({
     message: "Project ready to use",
@@ -503,6 +527,34 @@ exports.createProject = async (req, res) => {
 
     if (duplicate) {
       return respondWithReusableProject(res, duplicate);
+    }
+
+    const reactivatedProject = await reactivateArchivedProjectByName({
+      userId: req.user._id,
+      clientId,
+      normalizedName,
+      name: trimmedName,
+      remark,
+    });
+
+    if (reactivatedProject) {
+      await logTimesheetActivity({
+        actor: req.user.username,
+        action: "project_reactivated",
+        description: `Reactivated Timesheet project "${reactivatedProject.name}"`,
+        entityId: reactivatedProject._id,
+        metadata: {
+          clientId: String(reactivatedProject.clientId),
+          remark: reactivatedProject.remark,
+        },
+      });
+
+      return res.status(200).json({
+        message: "Project reactivated successfully",
+        reused: true,
+        reactivated: true,
+        data: buildProjectResponse(reactivatedProject),
+      });
     }
 
     const project = await TimesheetProject.create({
