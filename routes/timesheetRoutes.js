@@ -15,11 +15,6 @@ router.post("/projects", timesheetController.createProject);
 router.patch("/projects/:id", timesheetController.updateProject);
 router.delete("/projects/:id", timesheetController.deleteProject);
 
-router.get("/projects/:projectId/details", timesheetController.getDetails);
-router.post("/projects/:projectId/details", timesheetController.createDetail);
-router.patch("/details/:id", timesheetController.updateDetail);
-router.delete("/details/:id", timesheetController.deleteDetail);
-
 router.get("/entries", timesheetController.getEntries);
 router.post("/entries", timesheetController.createEntry);
 router.patch("/entries/:id", timesheetController.updateEntry);
