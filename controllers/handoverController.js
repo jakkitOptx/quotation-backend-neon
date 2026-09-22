@@ -11,8 +11,8 @@ async function quotationFor(req, write = false) {
   if (!canViewQuotation(req.user, quotation) || (write && !canEditQuotation(req.user, quotation))) {
     throw Object.assign(new Error("Forbidden"), { status: 403 });
   }
-  if (quotation.approvalStatus !== "Approved") {
-    throw Object.assign(new Error("Only approved quotations can use handovers"), { status: 409 });
+  if (quotation.approvalStatus === "Canceled") {
+    throw Object.assign(new Error("Canceled quotations cannot use handovers"), { status: 409 });
   }
   return quotation;
 }

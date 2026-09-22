@@ -2,7 +2,7 @@
 
 เก็บ collection `handovers` แยกจาก QT โดยมี unique `quotationId`: 1 ฉบับต่อ QT และ PUT เพื่อสร้างหรือแทนที่ข้อมูลเดิม ไม่กระทบยอดเงินหรือ approval flow ของ QT ไม่สร้าง PDF หรือ UI ในงานนี้
 
-ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ตรวจสิทธิ์ดู QT ด้วย `canViewQuotation` และตรวจ `approvalStatus === "Approved"` ทุกครั้ง; defaults และ PUT ตรวจ `canEditQuotation` เพิ่มด้วย หาก QT เปลี่ยนสถานะจะไม่สามารถอ่าน/บันทึกผ่าน endpoints นี้ แต่ข้อมูลเดิมยังอยู่
+ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ตรวจสิทธิ์ดู QT ด้วย `canViewQuotation`; defaults และ PUT ตรวจ `canEditQuotation` เพิ่มด้วย QT ใช้ handover ได้ทุก status ยกเว้น `Canceled` ซึ่งจะไม่สามารถอ่านหรือบันทึกผ่าน endpoints นี้ได้ แต่ข้อมูลเดิมยังอยู่
 
 | Method | Endpoint | การทำงาน |
 |---|---|---|
@@ -83,9 +83,9 @@
 
 ชนิดเดิมที่มี label ไม่ซ้ำกัน เช่น `D` → Database จะใช้เป็น fallback ได้ แม้ QT เก่ามี prefix/บริษัทไม่ตรง mapping ปัจจุบัน ส่วน `S` ไม่มี fallback เพราะ NEON คือ Strategy แต่ OPTX คือ SEO หากไม่พบ mapping คืน 400
 
-HTTP errors: 400 ข้อมูลไม่ถูกต้อง/client ไม่พบ/mapping ไม่รองรับ; 401/403 ตาม auth middleware; 403 ไม่มีสิทธิ์ QT; 404 QT หรือหนังสือไม่พบ; 409 QT ไม่ Approved หรือชน unique key ขณะสร้างพร้อมกัน (ให้ retry PUT)
+HTTP errors: 400 ข้อมูลไม่ถูกต้อง/client ไม่พบ/mapping ไม่รองรับ; 401/403 ตาม auth middleware; 403 ไม่มีสิทธิ์ QT; 404 QT หรือหนังสือไม่พบ; 409 QT ถูก Canceled หรือชน unique key ขณะสร้างพร้อมกัน (ให้ retry PUT)
 
-การเขียนพร้อมกันเป็น last-write-wins; ไม่มี revision history ในรุ่นนี้ การตรวจ Approved เกิดก่อนบันทึก ไม่ใช่ transaction ร่วมกับการเปลี่ยนสถานะ QT
+การเขียนพร้อมกันเป็น last-write-wins; ไม่มี revision history ในรุ่นนี้ การตรวจสถานะ Canceled เกิดก่อนบันทึก ไม่ใช่ transaction ร่วมกับการเปลี่ยนสถานะ QT
 
 ## ตรวจสอบ
 
