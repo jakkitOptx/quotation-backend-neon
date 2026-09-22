@@ -24,7 +24,7 @@
 | 6 | `completionPercentage` ตัวเลข 0–100 ทศนิยมได้ 2 หลัก; server คำนวณ `remainingPercentage` |
 | 7 | `deliveredToClientId` → `deliveredToClient` |
 | 8–10 | `sender: {name, position, clientId}` |
-| 11–13 | `recipients[0]: {name, position, clientId}` เป็นผู้รับมอบตามภาพ |
+| 11–13 | `recipients[0]: {name, position, clientId}` เป็นผู้รับมอบตามภาพ (`name` และ `position` ไม่บังคับ; `clientId` ยังบังคับ) |
 | 14 | `remarkEnabled`, `remark` |
 | 15 | `additionalRecipientEnabled`, `recipients[1]` |
 
@@ -67,6 +67,7 @@
 - ตัวอย่างนี้คืน `remainingPercentage: 80`; ต่ำกว่า 100 ต้องส่งเดือนและปี ค.ศ. รูปแบบ `YYYY-MM` เพื่อให้ UI แสดงเป็นเดือน/ปี พ.ศ. ได้โดยไม่กำกวม
 - เมื่อครบ 100 ระบบบันทึกเดือนเป็น null; ไม่ต้องส่ง `%` ในตัวเลข
 - เมื่อไม่เพิ่มผู้รับมอบ ให้ส่ง `additionalRecipientEnabled: false` และ recipients 1 คนเท่านั้น
+- `name` และ `position` ของผู้รับมอบทั้งสองคนเป็น optional และจะบันทึกเป็น `""` เมื่อไม่ส่งค่า; `clientId` ของผู้รับมอบยังบังคับ และข้อมูล `sender` ยังบังคับตามเดิม
 - เมื่อปิด remark ระบบล้างข้อความเป็น `""`; เมื่อเปิดต้องมีข้อความไม่เกิน 5,000 ตัวอักษร
 - `documentDate` เป็นวันที่หนังสือ รูปแบบ `YYYY-MM-DD` (ค.ศ.) แยกจากวันที่ QT; GET คืนวันที่แบบ ISO
 - เก็บ snapshot ของชื่อบริษัทและข้อมูล QT ทุกครั้งที่ PUT พร้อม `createdBy`, `updatedBy`, `createdAt`, `updatedAt` การเปลี่ยน client/QT ไม่แก้ฉบับที่บันทึกไว้จนกว่าจะ PUT ใหม่

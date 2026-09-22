@@ -9,6 +9,11 @@ const text = (value, field, max = 300) => {
   if (typeof value !== "string" || !value.trim() || value.trim().length > max) fail(`${field} is required (maximum ${max} characters)`);
   return value.trim();
 };
+const optionalText = (value, field, max = 300) => {
+  if (value == null || value === "") return "";
+  if (typeof value !== "string" || value.trim().length > max) fail(`${field} must be a string (maximum ${max} characters)`);
+  return value.trim();
+};
 const id = (value, field) => {
   if (typeof value !== "string" || !/^[a-f\d]{24}$/i.test(value)) fail(`${field} must be a valid ID`);
   return value;
@@ -17,9 +22,9 @@ const flag = (value, field) => {
   if (typeof value !== "boolean") fail(`${field} must be a boolean`);
   return value;
 };
-const person = (value, field) => ({
-  name: text(value?.name, `${field}.name`),
-  position: text(value?.position, `${field}.position`),
+const person = (value, field, optionalDetails = false) => ({
+  name: (optionalDetails ? optionalText : text)(value?.name, `${field}.name`),
+  position: (optionalDetails ? optionalText : text)(value?.position, `${field}.position`),
   clientId: id(value?.clientId, `${field}.clientId`),
 });
 
@@ -46,7 +51,7 @@ function normalizePayload(body) {
     remainingPercentage: Math.round((100 - percentage) * 100) / 100,
     expectedCompletionMonth,
     sender: person(body.sender, "sender"),
-    recipients: body.recipients.map((value, i) => person(value, `recipients[${i}]`)),
+    recipients: body.recipients.map((value, i) => person(value, `recipients[${i}]`, true)),
     additionalRecipientEnabled,
     remarkEnabled,
     remark: remarkEnabled ? text(body.remark, "remark", 5000) : "",

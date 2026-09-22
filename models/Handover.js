@@ -9,6 +9,11 @@ const person = new mongoose.Schema({
   position: requiredText,
   company: { type: client, required: true },
 }, { _id: false });
+const recipient = new mongoose.Schema({
+  name: { type: String, default: "" },
+  position: { type: String, default: "" },
+  company: { type: client, required: true },
+}, { _id: false });
 
 const schema = new mongoose.Schema({
   quotationId: { type: mongoose.Schema.Types.ObjectId, ref: "Quotation", required: true, unique: true },
@@ -25,7 +30,7 @@ const schema = new mongoose.Schema({
   remainingPercentage: { type: Number, min: 0, max: 100, required: true },
   expectedCompletionMonth: { type: String, default: null },
   sender: { type: person, required: true },
-  recipients: { type: [person], required: true },
+  recipients: { type: [recipient], required: true },
   additionalRecipientEnabled: { type: Boolean, required: true },
   remarkEnabled: { type: Boolean, required: true },
   remark: { type: String, default: "" },
