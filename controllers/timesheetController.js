@@ -79,6 +79,8 @@ const TIMESHEET_PERIOD_LOCKED_MESSAGE = "This timesheet period is locked";
 const TIMESHEET_PERIOD_DEADLINE_MESSAGE =
   "This timesheet period is past the submission deadline";
 const SUBMISSION_STATUSES = ["pending", "approved", "rejected", "withdrawn"];
+// Three consecutive calendar months contain at most 92 days.
+const MAX_DASHBOARD_EXPORT_DAYS = 92;
 
 const normalizeUsername = (value) => String(value || "").trim().toLowerCase();
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -207,17 +209,31 @@ const buildDailyKeys = (range) => {
   return dailyKeys;
 };
 
-const aggregateHierarchicalSummary = async ({ userIds, range }) => {
-  const summary = await TimesheetEntry.aggregate([
-    {
-      $match: {
-        userId: { $in: userIds },
-        workDate: {
-          $gte: range.start,
-          $lt: range.endExclusive,
-        },
-      },
+const aggregateHierarchicalSummary = async ({
+  userIds,
+  range,
+  clientId,
+  projectId,
+  includeInactiveProjects = false,
+}) => {
+  const match = {
+    userId: { $in: userIds },
+    workDate: {
+      $gte: range.start,
+      $lt: range.endExclusive,
     },
+  };
+
+  if (clientId) {
+    match.clientId = clientId;
+  }
+
+  if (projectId) {
+    match.projectId = projectId;
+  }
+
+  const summary = await TimesheetEntry.aggregate([
+    { $match: match },
     {
       $lookup: {
         from: "users",
@@ -245,7 +261,9 @@ const aggregateHierarchicalSummary = async ({ userIds, range }) => {
     { $unwind: "$user" },
     { $unwind: "$client" },
     { $unwind: "$project" },
-    { $match: { "project.isActive": true } },
+    ...(includeInactiveProjects
+      ? []
+      : [{ $match: { "project.isActive": true } }]),
     {
       $group: {
         _id: {
@@ -2122,6 +2140,144 @@ exports.getDashboardSummary = async (req, res) => {
   } catch (error) {
     console.error("getDashboardSummary error:", error);
     return res.status(500).json({ message: "Failed to fetch dashboard summary" });
+  }
+};
+
+exports.getDashboardExportData = async (req, res) => {
+  try {
+    const {
+      from,
+      to,
+      userId: rawUserId,
+      clientId: rawClientId,
+      projectId: rawProjectId,
+      department: rawDepartment,
+      team: rawTeam,
+      search: rawSearch,
+    } = req.query;
+    const range = parseDateRange(from, to);
+
+    if (!range) {
+      return res.status(400).json({ message: "Valid from and to dates are required" });
+    }
+
+    const dates = buildDailyKeys(range);
+    if (dates.length > MAX_DASHBOARD_EXPORT_DAYS) {
+      return res.status(400).json({
+        message: `Date range must not exceed ${MAX_DASHBOARD_EXPORT_DAYS} days`,
+      });
+    }
+
+    const optionalStrings = {
+      userId: rawUserId,
+      clientId: rawClientId,
+      projectId: rawProjectId,
+      department: rawDepartment,
+      team: rawTeam,
+      search: rawSearch,
+    };
+
+    for (const [name, value] of Object.entries(optionalStrings)) {
+      if (value !== undefined && typeof value !== "string") {
+        return res.status(400).json({ message: `${name} must be a string` });
+      }
+    }
+
+    const userId = String(rawUserId || "").trim();
+    const clientId = String(rawClientId || "").trim();
+    const projectId = String(rawProjectId || "").trim();
+    const department = String(rawDepartment || "").trim().toLowerCase();
+    const team = String(rawTeam || "").trim().toLowerCase();
+    const search = String(rawSearch || "").trim().toLowerCase();
+
+    for (const [name, value] of Object.entries({ userId, clientId, projectId })) {
+      if (value && !isValidObjectId(value)) {
+        return res.status(400).json({ message: `Invalid ${name}` });
+      }
+    }
+
+    const dashboardAccess = await getVisibleDashboardUsers(req.user);
+    if (!dashboardAccess.canViewDashboard) {
+      return res.status(403).json({
+        message: "You do not have permission to view the timesheet dashboard",
+      });
+    }
+
+    const visibleUserIds = new Set(dashboardAccess.visibleUserIds.map(String));
+    if (userId && !visibleUserIds.has(userId)) {
+      return res.status(403).json({
+        message: "You do not have permission to view this user's timesheet",
+      });
+    }
+
+    const selectedUsers = dashboardAccess.data.filter((user) => {
+      const selectedUserId = String(user._id);
+      if (userId && selectedUserId !== userId) {
+        return false;
+      }
+
+      if (department && String(user.department || "").trim().toLowerCase() !== department) {
+        return false;
+      }
+
+      if (team && String(user.team || "").trim().toLowerCase() !== team) {
+        return false;
+      }
+
+      if (search) {
+        const searchableText = String(user.username || "").toLowerCase();
+
+        if (!searchableText.includes(search)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    const selectedUserIds = selectedUsers.map(
+      (user) => new mongoose.Types.ObjectId(user._id)
+    );
+    const aggregated = selectedUserIds.length
+      ? await aggregateHierarchicalSummary({
+          userIds: selectedUserIds,
+          range,
+          clientId: clientId ? new mongoose.Types.ObjectId(clientId) : undefined,
+          projectId: projectId ? new mongoose.Types.ObjectId(projectId) : undefined,
+          includeInactiveProjects: true,
+        })
+      : { totalHours: 0, users: [] };
+
+    const rows = aggregated.users.flatMap((user) =>
+      user.clients.flatMap((client) =>
+        client.projects.map((project) => ({
+          userId: user.userId,
+          employeeName: user.username,
+          department: user.department,
+          clientId: client.clientId,
+          clientName: client.clientName,
+          projectId: project.projectId,
+          projectName: project.name,
+          dailyHours: project.dailyHours,
+          totalHours: project.totalHours,
+        }))
+      )
+    );
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+    return res.status(200).json({
+      range: { from: range.from, to: range.to },
+      dates: dates.map((date) => ({
+        date,
+        day: dayNames[new Date(`${date}T00:00:00.000Z`).getUTCDay()],
+      })),
+      totalRows: rows.length,
+      totalHours: aggregated.totalHours,
+      rows,
+    });
+  } catch (error) {
+    console.error("getDashboardExportData error:", error);
+    return res.status(500).json({ message: "Failed to fetch dashboard export data" });
   }
 };
 

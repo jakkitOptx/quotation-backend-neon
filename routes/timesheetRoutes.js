@@ -43,6 +43,7 @@ router.get("/capabilities", timesheetController.getTimesheetCapabilities);
 
 router.get("/dashboard/users", timesheetController.getDashboardUsers);
 router.get("/dashboard/summary", timesheetController.getDashboardSummary);
+router.get("/dashboard/export-data", timesheetController.getDashboardExportData);
 router.get(
   "/dashboard/users/:userId/summary",
   timesheetController.getDashboardUserSummary
