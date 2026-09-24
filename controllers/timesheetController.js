@@ -19,6 +19,7 @@ const {
   parseDateRange,
   parseWorkDate,
   getWeeklyPeriod,
+  getWeeklyPeriodForWorkDate,
   formatWorkDate,
   getThailandDateKey,
 } = require("../utils/timesheet");
@@ -393,6 +394,21 @@ const getTimesheetSummaryForUser = async (userId, range) => {
     totalHours: aggregated.totalHours,
     clients: userSummary?.clients || [],
   };
+};
+
+const getWeeklyPeriodsForRange = (range) => {
+  const periods = [];
+  let period = getWeeklyPeriodForWorkDate(range.start);
+
+  while (period && period.periodStart < range.endExclusive) {
+    periods.push(period);
+    const nextPeriodStart = new Date(
+      period.periodStart.getTime() + 7 * 24 * 60 * 60 * 1000
+    );
+    period = getWeeklyPeriod(formatWorkDate(nextPeriodStart));
+  }
+
+  return periods;
 };
 
 const ensureClientExists = async (clientId) => {
@@ -2003,6 +2019,282 @@ exports.getSummary = async (req, res) => {
   } catch (error) {
     console.error("getSummary error:", error);
     return res.status(500).json({ message: "Failed to fetch timesheet summary" });
+  }
+};
+
+exports.saveEntriesBatch = async (req, res) => {
+  try {
+    const entries = req.body?.entries ?? [];
+    const deleteEntryIds = req.body?.deleteEntryIds ?? [];
+
+    if (!Array.isArray(entries) || !Array.isArray(deleteEntryIds)) {
+      return res.status(400).json({
+        message: "entries and deleteEntryIds must be arrays",
+      });
+    }
+
+    if (entries.length === 0 && deleteEntryIds.length === 0) {
+      return res.status(400).json({ message: "At least one entry change is required" });
+    }
+
+    if (entries.length > 500 || deleteEntryIds.length > 500) {
+      return res.status(400).json({ message: "A batch cannot contain more than 500 changes" });
+    }
+
+    const normalizedEntries = [];
+    const entryKeys = new Set();
+
+    for (const item of entries) {
+      if (![item?.clientId, item?.projectId].every(isValidObjectId)) {
+        return res.status(400).json({
+          message: "Every entry requires valid clientId and projectId",
+        });
+      }
+
+      const hours = parseHours(item.hours);
+      if (hours === null || hours <= 0 || hours > 24) {
+        return res.status(400).json({
+          message: "Every entry must have hours greater than 0 and less than or equal to 24",
+        });
+      }
+
+      const workDate = parseWorkDate(item.workDate);
+      if (!workDate) {
+        return res.status(400).json({
+          message: "Every entry requires workDate in YYYY-MM-DD format",
+        });
+      }
+
+      const key = `${String(item.projectId)}:${formatWorkDate(workDate)}`;
+      if (entryKeys.has(key)) {
+        return res.status(400).json({
+          message: "The batch contains duplicate project and workDate entries",
+        });
+      }
+      entryKeys.add(key);
+      normalizedEntries.push({
+        clientId: item.clientId,
+        projectId: item.projectId,
+        workDate,
+        hours,
+        key,
+      });
+    }
+
+    const uniqueDeleteIds = [...new Set(deleteEntryIds.map(String))];
+    if (!uniqueDeleteIds.every(isValidObjectId)) {
+      return res.status(400).json({ message: "deleteEntryIds contains an invalid entry id" });
+    }
+
+    const entriesToDelete = uniqueDeleteIds.length
+      ? await TimesheetEntry.find({
+          _id: { $in: uniqueDeleteIds },
+          userId: req.user._id,
+        })
+          .select("_id projectId workDate")
+          .lean()
+      : [];
+
+    if (entriesToDelete.length !== uniqueDeleteIds.length) {
+      return res.status(404).json({
+        message: "One or more Timesheet entries to delete were not found",
+      });
+    }
+
+    const deleteKeys = new Set(
+      entriesToDelete.map(
+        (entry) => `${String(entry.projectId)}:${formatWorkDate(entry.workDate)}`
+      )
+    );
+    if ([...entryKeys].some((key) => deleteKeys.has(key))) {
+      return res.status(400).json({
+        message: "The same Timesheet entry cannot be saved and deleted in one batch",
+      });
+    }
+
+    const weeklyPeriods = new Map();
+    [...normalizedEntries, ...entriesToDelete].forEach((entry) => {
+      const period = getWeeklyPeriodForWorkDate(entry.workDate);
+      if (period) weeklyPeriods.set(period.periodStartKey, period);
+    });
+
+    const accesses = await Promise.all(
+      [...weeklyPeriods.values()].map((period) =>
+        getTimesheetPeriodAccess({
+          userId: req.user._id,
+          periodStart: period.periodStartKey,
+        })
+      )
+    );
+    const blockedAccess = accesses.find((access) => !access?.canEdit);
+    if (blockedAccess) {
+      return respondPeriodAccessBlock(res, blockedAccess);
+    }
+
+    const hierarchyPairs = new Map();
+    normalizedEntries.forEach((entry) => {
+      hierarchyPairs.set(`${entry.clientId}:${entry.projectId}`, entry);
+    });
+    const hierarchyResults = await Promise.all(
+      [...hierarchyPairs.values()].map((entry) =>
+        validateHierarchy({
+          userId: req.user._id,
+          clientId: entry.clientId,
+          projectId: entry.projectId,
+        })
+      )
+    );
+    const hierarchyError = hierarchyResults.find(Boolean);
+    if (hierarchyError) {
+      return res.status(hierarchyError.status).json({ message: hierarchyError.message });
+    }
+
+    const keyFilters = normalizedEntries.map((entry) => ({
+      projectId: entry.projectId,
+      workDate: entry.workDate,
+    }));
+    const operations = [
+      ...normalizedEntries.map((entry) => ({
+        updateOne: {
+          filter: {
+            userId: req.user._id,
+            projectId: entry.projectId,
+            workDate: entry.workDate,
+          },
+          update: {
+            $set: { clientId: entry.clientId, hours: entry.hours },
+            $setOnInsert: {
+              userId: req.user._id,
+              projectId: entry.projectId,
+              workDate: entry.workDate,
+            },
+          },
+          upsert: true,
+        },
+      })),
+      ...uniqueDeleteIds.map((id) => ({
+        deleteOne: { filter: { _id: id, userId: req.user._id } },
+      })),
+    ];
+
+    const result = await TimesheetEntry.bulkWrite(operations, { ordered: true });
+    const savedEntries = keyFilters.length
+      ? await TimesheetEntry.find({
+          userId: req.user._id,
+          $or: keyFilters,
+        })
+          .sort({ workDate: 1, createdAt: 1 })
+          .populate("clientId", CLIENT_SELECT_FIELDS)
+          .populate("projectId", "name clientId isActive")
+          .lean()
+      : [];
+
+    const createdCount = Number(result.upsertedCount || 0);
+    const updatedCount = normalizedEntries.length - createdCount;
+    const deletedCount = Number(result.deletedCount || 0);
+    const auditEntityId = savedEntries[0]?._id || entriesToDelete[0]?._id;
+
+    if (auditEntityId) {
+      await logTimesheetActivity({
+        actor: req.user.username,
+        action: "entries_batch_saved",
+        description: `Saved ${normalizedEntries.length} and deleted ${deletedCount} Timesheet entries`,
+        entityId: auditEntityId,
+        metadata: { createdCount, updatedCount, deletedCount },
+      });
+    }
+
+    return res.status(200).json({
+      message: "Timesheet entries saved successfully",
+      createdCount,
+      updatedCount,
+      deletedCount,
+      data: savedEntries.map((entry) =>
+        normalizeEntryOutput({
+          ...entry,
+          client: entry.clientId,
+          project: entry.projectId,
+        })
+      ),
+    });
+  } catch (error) {
+    console.error("saveEntriesBatch error:", error);
+    if (isDuplicateKeyError(error)) {
+      return res.status(409).json({ message: TIMESHEET_ENTRY_DUPLICATE_MESSAGE });
+    }
+    return res.status(500).json({ message: "Failed to save Timesheet entries" });
+  }
+};
+
+exports.getOverview = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const range = parseDateRange(from, to);
+
+    if (!range) {
+      return res.status(400).json({ message: "Valid from and to dates are required" });
+    }
+
+    const entryQuery = {
+      userId: req.user._id,
+      workDate: { $gte: range.start, $lt: range.endExclusive },
+    };
+    const submissionQuery = {
+      userId: req.user._id,
+      periodStart: { $lt: range.endExclusive },
+      periodEnd: { $gte: range.start },
+    };
+    const weeklyPeriods = getWeeklyPeriodsForRange(range);
+
+    const [summary, entries, submissions, periodStatuses] = await Promise.all([
+      getTimesheetSummaryForUser(req.user._id, range),
+      TimesheetEntry.find(entryQuery)
+        .sort({ workDate: 1, createdAt: 1 })
+        .populate("clientId", CLIENT_SELECT_FIELDS)
+        .populate("projectId", "name clientId isActive")
+        .lean(),
+      TimesheetSubmission.find(submissionQuery)
+        .sort({ submittedAt: -1, createdAt: -1 })
+        .lean(),
+      Promise.all(
+        weeklyPeriods.map((period) =>
+          getTimesheetPeriodAccess({
+            userId: req.user._id,
+            periodStart: period.periodStartKey,
+          })
+        )
+      ),
+    ]);
+
+    return res.status(200).json({
+      range: { from: range.from, to: range.to },
+      summary,
+      entries: entries
+        .filter((entry) => entry.projectId?.isActive)
+        .map((entry) =>
+          normalizeEntryOutput({
+            ...entry,
+            client: entry.clientId,
+            project: entry.projectId,
+          })
+        ),
+      submissions: submissions.map(buildSubmissionResponse),
+      periodStatuses: periodStatuses.map((access) => ({
+        periodStart: access.periodStart,
+        periodEnd: access.periodEnd,
+        deadline: access.deadline,
+        isExpired: access.isExpired,
+        isReopened: access.isReopened,
+        reopenUntil: access.reopenUntil,
+        submissionStatus: access.submissionStatus,
+        canEdit: access.canEdit,
+        canSubmit: access.canSubmit,
+        lockReason: access.lockReason,
+      })),
+    });
+  } catch (error) {
+    console.error("getOverview error:", error);
+    return res.status(500).json({ message: "Failed to fetch timesheet overview" });
   }
 };
 
