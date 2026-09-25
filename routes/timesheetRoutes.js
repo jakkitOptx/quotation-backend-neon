@@ -9,6 +9,7 @@ router.use(authMiddleware);
 router.post("/admin/reopen", timesheetController.reopenTimesheetPeriod);
 router.get("/admin/reopen-status", timesheetController.getAdminReopenStatus);
 router.get("/period-status", timesheetController.getMyPeriodStatus);
+router.get("/overview", timesheetController.getOverview);
 
 router.get("/projects", timesheetController.getProjects);
 router.post("/projects", timesheetController.createProject);
@@ -16,6 +17,7 @@ router.patch("/projects/:id", timesheetController.updateProject);
 router.delete("/projects/:id", timesheetController.deleteProject);
 
 router.get("/entries", timesheetController.getEntries);
+router.post("/entries/batch", timesheetController.saveEntriesBatch);
 router.post("/entries", timesheetController.createEntry);
 router.patch("/entries/:id", timesheetController.updateEntry);
 router.delete("/entries/:id", timesheetController.deleteEntry);
