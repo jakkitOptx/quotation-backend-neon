@@ -53,6 +53,15 @@ exports.save = endpoint(async (req, res) => {
   const quotation = await quotationFor(req, true);
   const payload = normalizePayload(req.body);
   const sources = sourceFields(quotation, req.user);
+  const existingHandover = await Handover.findOne({ quotationId: quotation._id })
+    .select("_id")
+    .lean();
+  const refreshedSources = existingHandover
+    ? {
+        projectName: sources.projectName,
+        quotationNumber: sources.quotationNumber,
+      }
+    : sources;
   const ids = [...new Set([payload.hiringClientId, payload.deliveredToClientId, payload.sender.clientId, ...payload.recipients.map(p => p.clientId)])];
   const clients = await Client.find({ _id: { $in: ids } }).select("customerName").lean();
   const byId = new Map(clients.map(c => [String(c._id), c]));
@@ -67,7 +76,7 @@ exports.save = endpoint(async (req, res) => {
     { quotationId: quotation._id },
     {
       $set: {
-        ...values, ...sources, template: "pattern1",
+        ...values, ...refreshedSources, template: "pattern1",
         hiringClient: company(hiringClientId), deliveredToClient: company(deliveredToClientId),
         sender: signer(sender), recipients: recipients.map(signer), updatedBy: req.user._id,
       },
