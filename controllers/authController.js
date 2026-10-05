@@ -162,7 +162,7 @@ exports.login = async (req, res) => {
         teamRole: user.teamRole,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "12h" }
+      { expiresIn: "7d" }
     );
 
     res.status(200).json({
@@ -183,7 +183,7 @@ exports.login = async (req, res) => {
         teamGroup: user.teamGroup,
         teamRole: user.teamRole,
       },
-      expiresIn: 12 * 60 * 60,
+      expiresIn: 7 * 24 * 60 * 60,
     });
   } catch (error) {
     console.error("❌ Login Error:", error);
