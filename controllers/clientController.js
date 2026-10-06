@@ -2,6 +2,35 @@
 const mongoose = require("mongoose");
 const Client = require("../models/Client");
 
+const englishProjectCollator = new Intl.Collator("en", {
+  sensitivity: "base",
+  numeric: true,
+});
+const thaiProjectCollator = new Intl.Collator("th", {
+  sensitivity: "base",
+  numeric: true,
+});
+
+const getProjectAlphabetOrder = (value) => {
+  const name = String(value || "");
+  const englishIndex = name.search(/[A-Za-z]/);
+  const thaiIndex = name.search(/[\u0E00-\u0E7F]/);
+
+  if (englishIndex >= 0 && (thaiIndex < 0 || englishIndex < thaiIndex)) return 0;
+  if (thaiIndex >= 0) return 1;
+  return 2;
+};
+
+const sortProjects = (projects) =>
+  [...(Array.isArray(projects) ? projects : [])].sort((first, second) => {
+    const firstOrder = getProjectAlphabetOrder(first);
+    const secondOrder = getProjectAlphabetOrder(second);
+
+    if (firstOrder !== secondOrder) return firstOrder - secondOrder;
+    if (firstOrder === 1) return thaiProjectCollator.compare(first, second);
+    return englishProjectCollator.compare(first, second);
+  });
+
 const normalizeAuthorizedApprovers = (value) => {
   if (!Array.isArray(value)) return [];
 
@@ -147,7 +176,7 @@ exports.getClientById = async (req, res) => {
     res.status(200).json({
       ...client,
       email: client.email || "",
-      projects: client.projects || [],
+      projects: sortProjects(client.projects),
     });
   } catch (error) {
     console.error("Error fetching client:", error);
@@ -201,3 +230,4 @@ exports.getClientProjects = async (req, res) => {
 
 exports.normalizeProjects = normalizeProjects;
 exports.normalizeClientPayload = normalizeClientPayload;
+exports.sortProjects = sortProjects;
