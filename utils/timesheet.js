@@ -49,6 +49,21 @@ const addDays = ({ year, month, day }, amount) => {
   };
 };
 
+const addMonthsClamped = ({ year, month, day }, amount) => {
+  const targetMonth = new Date(Date.UTC(year, month - 1 + amount, 1));
+  const targetYear = targetMonth.getUTCFullYear();
+  const targetMonthNumber = targetMonth.getUTCMonth() + 1;
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(targetYear, targetMonthNumber, 0)
+  ).getUTCDate();
+
+  return {
+    year: targetYear,
+    month: targetMonthNumber,
+    day: Math.min(day, lastDayOfTargetMonth),
+  };
+};
+
 const parseDateRange = (from, to) => {
   const fromParts = parseDateOnly(from);
   const toParts = parseDateOnly(to);
@@ -172,7 +187,9 @@ const getDeadlineDateKey = (periodEnd) => {
     return null;
   }
 
-  const deadlineParts = addDays(periodEndParts, 14);
+  // A weekly Timesheet remains editable through the same calendar date in the
+  // following month. Clamp month-end dates (for example, Jan 31 -> Feb 28/29).
+  const deadlineParts = addMonthsClamped(periodEndParts, 1);
   return `${deadlineParts.year.toString().padStart(4, "0")}-${String(
     deadlineParts.month
   ).padStart(2, "0")}-${String(deadlineParts.day).padStart(2, "0")}`;
