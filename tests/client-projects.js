@@ -2,10 +2,75 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const Client = require("../models/Client");
 const {
+  getClientById,
   getClientProjects,
   normalizeClientPayload,
   normalizeProjects,
+  sortProjects,
 } = require("../controllers/clientController");
+
+test("sorts English projects A-Z before Thai projects ก-ฮ", () => {
+  assert.deepEqual(
+    sortProjects([
+      "โครงการ ฮ",
+      "Zulu",
+      "โครงการ ก",
+      "alpha",
+      "Project 10",
+      "Project 2",
+      "แก้ว",
+    ]),
+    [
+      "alpha",
+      "Project 2",
+      "Project 10",
+      "Zulu",
+      "แก้ว",
+      "โครงการ ก",
+      "โครงการ ฮ",
+    ]
+  );
+});
+
+test("client lookup returns projects sorted without changing the stored list", async () => {
+  const originalFindById = Client.findById;
+  const storedProjects = ["โครงการ ฮ", "Beta", "โครงการ ก", "alpha"];
+
+  Client.findById = () => ({
+    lean: async () => ({
+      _id: "aaaaaaaaaaaaaaaaaaaaaaaa",
+      customerName: "Example",
+      projects: storedProjects,
+    }),
+  });
+
+  const req = { params: { id: "aaaaaaaaaaaaaaaaaaaaaaaa" } };
+  const res = {
+    statusCode: 200,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(data) {
+      this.data = data;
+      return this;
+    },
+  };
+
+  try {
+    await getClientById(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.data.projects, [
+      "alpha",
+      "Beta",
+      "โครงการ ก",
+      "โครงการ ฮ",
+    ]);
+    assert.deepEqual(storedProjects, ["โครงการ ฮ", "Beta", "โครงการ ก", "alpha"]);
+  } finally {
+    Client.findById = originalFindById;
+  }
+});
 
 test("normalizes a client project list", () => {
   assert.deepEqual(
