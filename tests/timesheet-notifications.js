@@ -127,6 +127,7 @@ test("submission notifies the current ApproveFlow approver only", async () => {
     assert.equal(notification.module, "timesheet");
     assert.equal(notification.event, TIMESHEET_NOTIFICATION_EVENTS.pending);
     assert.equal(notification.entityId, submissionId);
+    assert.equal(notification.link, `/timesheets/approvals/${submissionId}`);
     assert.equal(notification.createdBy, "staff@neonworks.co.th");
     assert.match(notification.message, /Somchai Jaidee/);
     assert.match(notification.message, /2026-10-19 - 2026-10-25/);

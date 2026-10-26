@@ -22,6 +22,8 @@ const formatDisplayName = (user) =>
 const formatPeriod = (submission) =>
   `${formatWorkDate(submission.periodStart)} - ${formatWorkDate(submission.periodEnd)}`;
 
+const buildApprovalLink = (submissionId) => `/timesheets/approvals/${submissionId}`;
+
 const findSubmitter = (submission) =>
   User.findById(submission.userId, "username firstName lastName").lean();
 
@@ -39,7 +41,7 @@ const createNotifications = async (items) => {
       user: item.user,
       title: item.title,
       message: item.message,
-      link: null,
+      link: buildApprovalLink(item.entityId),
       type: "approval",
       module: TIMESHEET_MODULE,
       event: item.event,
