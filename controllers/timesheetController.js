@@ -30,6 +30,12 @@ const {
   getTimesheetPeriodAccess,
 } = require("../services/timesheetPeriodAccessService");
 const { logTimesheetActivity } = require("../services/timesheetAuditService");
+const {
+  notifySubmissionCreated,
+  notifySubmissionApproved,
+  notifySubmissionRejected,
+  removeSubmissionNotifications,
+} = require("../services/timesheetNotificationService");
 
 const CLIENT_SELECT_FIELDS =
   "customerName companyBaseName email authorizedApprovers address taxIdentificationNumber contactPhoneNumber branchNo";
@@ -1388,6 +1394,7 @@ exports.createSubmission = async (req, res) => {
       entityId: submission._id,
       metadata: { periodStart: period.periodStartKey, periodEnd: period.periodEndKey, totalHours },
     });
+    await notifySubmissionCreated({ submission, submitter: req.user });
 
     return res.status(201).json({
       message: "Timesheet submitted successfully",
@@ -1699,6 +1706,7 @@ exports.withdrawSubmission = async (req, res) => {
       entityId: submission._id,
       metadata: { periodStart: formatWorkDate(submission.periodStart), periodEnd: formatWorkDate(submission.periodEnd) },
     });
+    await removeSubmissionNotifications(submission._id);
 
     return res.status(200).json({
       message: "Timesheet submission withdrawn successfully",
@@ -1917,6 +1925,11 @@ exports.approveSubmission = async (req, res) => {
         metadata: { periodStart: formatWorkDate(updated.periodStart), periodEnd: formatWorkDate(updated.periodEnd) },
       });
     }
+    await notifySubmissionApproved({
+      submission: updated,
+      approver: req.user,
+      level: current.step.level,
+    });
 
     return res.status(200).json({
       message: "Timesheet submission approved successfully",
@@ -1993,6 +2006,7 @@ exports.rejectSubmission = async (req, res) => {
       entityId: updated._id,
       metadata: { periodStart: formatWorkDate(updated.periodStart), periodEnd: formatWorkDate(updated.periodEnd), reason },
     });
+    await notifySubmissionRejected({ submission: updated, approver: req.user, reason });
 
     return res.status(200).json({
       message: "Timesheet submission rejected successfully",
