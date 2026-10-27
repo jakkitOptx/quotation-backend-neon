@@ -161,6 +161,10 @@ test("intermediate approval notifies submitter and the next approver", async () 
         ["head@neonworks.co.th", TIMESHEET_NOTIFICATION_EVENTS.pending],
       ]
     );
+    assert.deepEqual(
+      captured.inserted.map((item) => item.link),
+      ["/timesheets/dashboard", `/timesheets/approvals/${submissionId}`]
+    );
   } finally {
     restore();
   }
@@ -198,6 +202,7 @@ test("rejection notifies the submitter with the reason", async () => {
     assert.equal(captured.inserted[0].user, "staff@neonworks.co.th");
     assert.equal(captured.inserted[0].event, TIMESHEET_NOTIFICATION_EVENTS.rejected);
     assert.match(captured.inserted[0].message, /Missing Friday/);
+    assert.equal(captured.inserted[0].link, "/timesheets/dashboard");
   } finally {
     restore();
   }

@@ -22,7 +22,9 @@ const formatDisplayName = (user) =>
 const formatPeriod = (submission) =>
   `${formatWorkDate(submission.periodStart)} - ${formatWorkDate(submission.periodEnd)}`;
 
+// Approval detail is approver-only, so owners are sent to their Timesheet dashboard.
 const buildApprovalLink = (submissionId) => `/timesheets/approvals/${submissionId}`;
+const OWNER_DASHBOARD_LINK = "/timesheets/dashboard";
 
 const findSubmitter = (submission) =>
   User.findById(submission.userId, "username firstName lastName").lean();
@@ -41,7 +43,7 @@ const createNotifications = async (items) => {
       user: item.user,
       title: item.title,
       message: item.message,
-      link: buildApprovalLink(item.entityId),
+      link: item.link || null,
       type: "approval",
       module: TIMESHEET_MODULE,
       event: item.event,
@@ -90,6 +92,7 @@ const buildPendingNotification = ({ submission, submitter, actor }) => {
     event: TIMESHEET_NOTIFICATION_EVENTS.pending,
     entityId: submission._id,
     createdBy: actor,
+    link: buildApprovalLink(submission._id),
   };
 };
 
@@ -136,6 +139,7 @@ const notifySubmissionApproved = ({ submission, approver, level }) =>
           : TIMESHEET_NOTIFICATION_EVENTS.approved,
         entityId: submission._id,
         createdBy: approver.username,
+        link: OWNER_DASHBOARD_LINK,
       },
     ];
 
@@ -166,6 +170,7 @@ const notifySubmissionRejected = ({ submission, approver, reason }) =>
         event: TIMESHEET_NOTIFICATION_EVENTS.rejected,
         entityId: submission._id,
         createdBy: approver.username,
+        link: OWNER_DASHBOARD_LINK,
       },
     ]);
   });
