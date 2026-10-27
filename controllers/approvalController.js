@@ -314,6 +314,7 @@ exports.updateApproverInLevel = async (req, res) => {
         user: quotation.createdByUser,
         message: `เอกสาร ${qtNumber} ถูกยกเลิกโดย ${actionBy}`,
         createdBy: actionBy,
+        link: `/quotations/${quotation._id}`,
         type: "approval",
         createdAt: now,
       });
@@ -339,6 +340,7 @@ exports.updateApproverInLevel = async (req, res) => {
         user: quotation.createdByUser,
         message: `เอกสาร ${qtNumber} ถูก Reject โดย ${actionBy}`,
         createdBy: actionBy,
+        link: `/quotations/${quotation._id}`,
         type: "approval",
         createdAt: now,
       });
@@ -370,6 +372,7 @@ exports.updateApproverInLevel = async (req, res) => {
           user: quotation.createdByUser,
           message: `เอกสาร ${qtNumber} ได้รับการอนุมัติครบทุกลำดับ ✅`,
           createdBy: actionBy,
+          link: `/quotations/${quotation._id}`,
           type: "approval",
           createdAt: now,
         });
@@ -398,6 +401,7 @@ exports.updateApproverInLevel = async (req, res) => {
             user: nextLevel.approver,
             message: `เอกสาร ${qtNumber} รอการอนุมัติจากคุณ`,
             createdBy: actionBy,
+            link: `/quotations/${quotation._id}`,
             type: "approval",
             createdAt: now,
           });
@@ -414,6 +418,7 @@ exports.updateApproverInLevel = async (req, res) => {
           user: quotation.createdByUser,
           message: `เอกสาร ${qtNumber} ได้รับการอนุมัติจาก ${actionBy}`,
           createdBy: actionBy,
+          link: `/quotations/${quotation._id}`,
           type: "approval",
           createdAt: now,
         });

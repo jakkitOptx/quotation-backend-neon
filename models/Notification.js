@@ -21,6 +21,19 @@ const NotificationSchema = new mongoose.Schema(
 
     // 🔹 บอกว่าอ่านแล้วหรือยัง
     isRead: { type: Boolean, default: false },
+    readAt: { type: Date, default: null },
+
+    // 🔹 หัวข้อสั้นๆ สำหรับแสดงใน dropdown ระฆัง (optional)
+    title: { type: String, default: "" },
+
+    // 🔹 module ต้นทาง เช่น "timesheet" (แจ้งเตือนใบเสนอราคาเดิมไม่มีค่านี้ = null)
+    module: { type: String, default: null },
+
+    // 🔹 เหตุการณ์ เช่น submission_pending / submission_approved / submission_rejected
+    event: { type: String, default: null },
+
+    // 🔹 id ของเอกสารต้นทาง (เช่น TimesheetSubmission) ใช้ลบ/อ่านแจ้งเตือนตามเอกสาร
+    entityId: { type: mongoose.Schema.Types.ObjectId, default: null },
 
     // 🔹 ใครเป็นผู้สร้าง (approver หรือ system)
     createdBy: { type: String, default: "system" },
@@ -31,4 +44,10 @@ const NotificationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Notification", NotificationSchema);
+// Bell dropdown and unread badge read by recipient, newest first.
+NotificationSchema.index({ user: 1, isRead: 1, createdAt: -1 });
+NotificationSchema.index({ module: 1, entityId: 1 });
+
+module.exports =
+  mongoose.models.Notification ||
+  mongoose.model("Notification", NotificationSchema);
