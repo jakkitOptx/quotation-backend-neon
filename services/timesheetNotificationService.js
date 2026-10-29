@@ -10,6 +10,7 @@ const TIMESHEET_NOTIFICATION_EVENTS = Object.freeze({
   approved: "submission_approved",
   fullyApproved: "submission_fully_approved",
   rejected: "submission_rejected",
+  unlocked: "submission_unlocked",
 });
 
 const normalizeRecipient = (value) => String(value || "").trim().toLowerCase();
@@ -175,6 +176,22 @@ const notifySubmissionRejected = ({ submission, approver, reason }) =>
     ]);
   });
 
+const notifySubmissionUnlocked = ({ submission, admin, reason, reopenUntil }) =>
+  runSafely("unlocked", async () => {
+    const submitter = await findSubmitter(submission);
+    return createNotifications([
+      {
+        user: submitter?.username,
+        title: "🔓 Timesheet ถูกปลดล็อกให้แก้ไข",
+        message: `Timesheet ${formatPeriod(submission)} (${submission.totalHours} ชม.) ถูกปลดล็อกโดย ${formatDisplayName(admin)}: ${reason} กรุณาแก้ไขและส่งอนุมัติใหม่${reopenUntil ? ` ภายในวันที่ ${reopenUntil}` : ""}`,
+        event: TIMESHEET_NOTIFICATION_EVENTS.unlocked,
+        entityId: submission._id,
+        createdBy: admin.username,
+        link: OWNER_DASHBOARD_LINK,
+      },
+    ]);
+  });
+
 // A withdrawn submission removes every notification it produced, read or not.
 const removeSubmissionNotifications = (submissionId) =>
   runSafely("withdrawn", () =>
@@ -187,5 +204,6 @@ module.exports = {
   notifySubmissionCreated,
   notifySubmissionApproved,
   notifySubmissionRejected,
+  notifySubmissionUnlocked,
   removeSubmissionNotifications,
 };

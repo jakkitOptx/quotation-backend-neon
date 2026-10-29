@@ -8,6 +8,14 @@ router.use(authMiddleware);
 
 router.post("/admin/reopen", timesheetController.reopenTimesheetPeriod);
 router.get("/admin/reopen-status", timesheetController.getAdminReopenStatus);
+router.get(
+  "/admin/approved-submissions",
+  timesheetController.getAdminApprovedSubmissions
+);
+router.post(
+  "/admin/submissions/:id/unlock",
+  timesheetController.unlockApprovedSubmission
+);
 router.get("/period-status", timesheetController.getMyPeriodStatus);
 router.get("/overview", timesheetController.getOverview);
 

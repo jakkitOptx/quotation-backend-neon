@@ -37,7 +37,7 @@ const TimesheetSubmissionSchema = new mongoose.Schema(
     periodEnd: { type: Date, required: true },
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected", "withdrawn"],
+      enum: ["pending", "approved", "rejected", "withdrawn", "unlocked"],
       default: "pending",
       required: true,
     },
@@ -48,13 +48,21 @@ const TimesheetSubmissionSchema = new mongoose.Schema(
     approvedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
     withdrawnAt: { type: Date, default: null },
+    // Admin unlock of an approved submission, kept so the record stays as audit history.
+    unlockedAt: { type: Date, default: null },
+    unlockedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    unlockReason: { type: String, default: "", trim: true },
     rejectionReason: { type: String, default: "", trim: true },
     latestComment: { type: String, default: "", trim: true },
   },
   { timestamps: true }
 );
 
-// Rejected and withdrawn submissions stay as audit history and can be resubmitted.
+// Rejected, withdrawn and unlocked submissions stay as audit history and can be resubmitted.
 TimesheetSubmissionSchema.index(
   { userId: 1, periodType: 1, periodStart: 1, periodEnd: 1 },
   {
@@ -64,6 +72,7 @@ TimesheetSubmissionSchema.index(
 );
 
 TimesheetSubmissionSchema.index({ userId: 1, submittedAt: -1 });
+TimesheetSubmissionSchema.index({ status: 1, approvedAt: -1 });
 TimesheetSubmissionSchema.index({ userId: 1, periodStart: 1, periodEnd: 1, status: 1 });
 TimesheetSubmissionSchema.index({
   status: 1,
