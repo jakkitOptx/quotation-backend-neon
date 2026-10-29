@@ -24,6 +24,7 @@ const Notification = require("../models/Notification");
 const User = require("../models/User");
 const TimesheetSubmission = require("../models/TimesheetSubmission");
 const TimesheetPeriodOverride = require("../models/TimesheetPeriodOverride");
+const ApproveFlow = require("../models/ApproveFlow");
 const { TIMESHEET_NOTIFICATION_EVENTS } = require("../services/timesheetNotificationService");
 const timesheetController = require("../controllers/timesheetController");
 const { getThailandDateKey, parseWorkDate, formatWorkDate } = require("../utils/timesheet");
@@ -180,6 +181,76 @@ test("approved submission list filters by user, period and search with paginatio
     assert.equal(row.user.displayName, "Somchai Jaidee");
     assert.equal(row.periodStart, "2026-10-19");
     assert.equal(row.canUnlock, true);
+  } finally {
+    restore.forEach((fn) => fn());
+  }
+});
+
+test("level 3 approvers only see their ApproveFlow subordinates and cannot unlock", async () => {
+  const head = { _id: "eeeeeeeeeeeeeeeeeeeeeeee", username: "head@neonworks.co.th", role: "manager", level: 3 };
+  const outsiderId = "ffffffffffffffffffffffff";
+  const capturedQueries = [];
+  let flowFilter = null;
+  const chain = {
+    sort() {
+      return this;
+    },
+    skip() {
+      return this;
+    },
+    limit() {
+      return this;
+    },
+    populate() {
+      return this;
+    },
+    lean: async () => [buildSubmission({ userId: staff })],
+  };
+  const restore = [
+    stub(TimesheetSubmission, {
+      find: (query) => {
+        capturedQueries.push(query);
+        return chain;
+      },
+      countDocuments: async () => 1,
+    }),
+    stub(ApproveFlow, {
+      find: (filter) => {
+        flowFilter = filter;
+        return { lean: async () => [{ _id: "111111111111111111111111" }] };
+      },
+    }),
+    stub(User, { find: () => ({ lean: async () => [{ _id: ownerId }] }) }),
+  ];
+
+  try {
+    const lowLevel = createResponse();
+    await timesheetController.getAdminApprovedSubmissions(
+      { user: { ...head, level: 2 }, query: {} },
+      lowLevel
+    );
+    assert.equal(lowLevel.statusCode, 403);
+
+    const res = createResponse();
+    await timesheetController.getAdminApprovedSubmissions({ user: head, query: {} }, res);
+    assert.equal(res.statusCode, 200);
+    assert.match(flowFilter["approvalHierarchy.approver"].$regex, /head@neonworks/);
+    assert.deepEqual(capturedQueries[0].userId, { $in: [ownerId] });
+    assert.equal(res.body.data[0].canUnlock, false);
+
+    const outsider = createResponse();
+    await timesheetController.getAdminApprovedSubmissions(
+      { user: head, query: { userId: outsiderId } },
+      outsider
+    );
+    assert.deepEqual(capturedQueries[1].userId, { $in: [] });
+
+    const unlock = createResponse();
+    await timesheetController.unlockApprovedSubmission(
+      { user: head, params: { id: submissionId }, body: { reason: "wrong hours" } },
+      unlock
+    );
+    assert.equal(unlock.statusCode, 403);
   } finally {
     restore.forEach((fn) => fn());
   }

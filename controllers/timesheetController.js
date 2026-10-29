@@ -1585,6 +1585,7 @@ const ADMIN_SUBMISSION_LIST_STATUSES = ["approved", "unlocked"];
 const MAX_ADMIN_SUBMISSION_PAGE_SIZE = 100;
 const MAX_UNLOCK_REASON_LENGTH = 500;
 const DEFAULT_UNLOCK_REOPEN_DAYS = 7;
+const MIN_APPROVED_LIST_VIEWER_LEVEL = 3;
 
 const parsePositiveInt = (value, fallback) => {
   if (value === undefined || value === "") {
@@ -1605,18 +1606,23 @@ const buildUserSummary = (user) =>
       }
     : null;
 
-const buildAdminSubmissionResponse = (submission) => ({
+const buildAdminSubmissionResponse = (submission, viewerIsAdmin) => ({
   ...buildSubmissionResponse(submission),
   userId: submission.userId?._id ? String(submission.userId._id) : String(submission.userId),
   user: buildUserSummary(submission.userId),
   unlockedBy: buildUserSummary(submission.unlockedBy),
-  canUnlock: submission.status === "approved",
+  canUnlock: viewerIsAdmin && submission.status === "approved",
 });
 
+// Admins see every user; level 3+ approvers see only users whose ApproveFlow
+// lists them, the same scope as the Timesheet dashboard.
 exports.getAdminApprovedSubmissions = async (req, res) => {
   try {
-    if (!isAdmin(req.user)) {
-      return res.status(403).json({ message: "Admin access is required" });
+    const viewerIsAdmin = isAdmin(req.user);
+    if (!viewerIsAdmin && !(Number(req.user?.level) >= MIN_APPROVED_LIST_VIEWER_LEVEL)) {
+      return res.status(403).json({
+        message: `Admin or level ${MIN_APPROVED_LIST_VIEWER_LEVEL}+ access is required`,
+      });
     }
 
     const { userId, from, to, search } = req.query;
@@ -1635,11 +1641,23 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
 
     const query = { status };
 
+    // null means unrestricted; each filter narrows the allowed owner ids.
+    let allowedUserIds = null;
+    const restrictUserIds = (ids) => {
+      allowedUserIds =
+        allowedUserIds === null ? ids : allowedUserIds.filter((id) => ids.includes(id));
+    };
+
+    if (!viewerIsAdmin) {
+      const scope = await getViewerDashboardScope(req.user);
+      restrictUserIds(scope.scope === "approver" ? scope.visibleUserIds : []);
+    }
+
     if (userId !== undefined) {
       if (!isValidObjectId(userId)) {
         return res.status(400).json({ message: "Valid userId is required" });
       }
-      query.userId = userId;
+      restrictUserIds([String(userId)]);
     }
 
     if (from !== undefined || to !== undefined) {
@@ -1666,12 +1684,11 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
         },
         "_id"
       ).lean();
-      const matchedIds = matchedUsers.map((user) => String(user._id));
-      query.userId = {
-        $in: query.userId
-          ? matchedIds.filter((matchedId) => matchedId === String(query.userId))
-          : matchedIds,
-      };
+      restrictUserIds(matchedUsers.map((user) => String(user._id)));
+    }
+
+    if (allowedUserIds !== null) {
+      query.userId = { $in: allowedUserIds };
     }
 
     const sortField = status === "unlocked" ? "unlockedAt" : "approvedAt";
@@ -1687,7 +1704,9 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
     ]);
 
     return res.status(200).json({
-      data: submissions.map(buildAdminSubmissionResponse),
+      data: submissions.map((submission) =>
+        buildAdminSubmissionResponse(submission, viewerIsAdmin)
+      ),
       pagination: {
         page,
         limit,
