@@ -176,14 +176,14 @@ const notifySubmissionRejected = ({ submission, approver, reason }) =>
     ]);
   });
 
-const notifySubmissionUnlocked = ({ submission, admin, reason }) =>
+const notifySubmissionUnlocked = ({ submission, admin, reason, reopenUntil }) =>
   runSafely("unlocked", async () => {
     const submitter = await findSubmitter(submission);
     return createNotifications([
       {
         user: submitter?.username,
         title: "🔓 Timesheet ถูกปลดล็อกให้แก้ไข",
-        message: `Timesheet ${formatPeriod(submission)} ถูกปลดล็อกโดย ${formatDisplayName(admin)}: ${reason} กรุณาแก้ไขและส่งอนุมัติใหม่`,
+        message: `Timesheet ${formatPeriod(submission)} (${submission.totalHours} ชม.) ถูกปลดล็อกโดย ${formatDisplayName(admin)}: ${reason} กรุณาแก้ไขและส่งอนุมัติใหม่${reopenUntil ? ` ภายในวันที่ ${reopenUntil}` : ""}`,
         event: TIMESHEET_NOTIFICATION_EVENTS.unlocked,
         entityId: submission._id,
         createdBy: admin.username,

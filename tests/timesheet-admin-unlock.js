@@ -240,10 +240,19 @@ test("level 3 approvers only see their ApproveFlow subordinates and cannot unloc
 
     const outsider = createResponse();
     await timesheetController.getAdminApprovedSubmissions(
-      { user: head, query: { userId: outsiderId } },
+      { user: head, query: { userId: outsiderId, limit: "500" } },
       outsider
     );
-    assert.deepEqual(capturedQueries[1].userId, { $in: [] });
+    assert.equal(capturedQueries.length, 1);
+    assert.deepEqual(outsider.body, {
+      data: [],
+      pagination: { page: 1, limit: 100, total: 0, totalPages: 0 },
+    });
+
+    ApproveFlow.find = () => ({ lean: async () => [] });
+    const noTeam = createResponse();
+    await timesheetController.getAdminApprovedSubmissions({ user: head, query: {} }, noTeam);
+    assert.equal(noTeam.statusCode, 403);
 
     const unlock = createResponse();
     await timesheetController.unlockApprovedSubmission(
@@ -266,7 +275,7 @@ test("approved submission list validates status and page size", async () => {
 
   const badLimit = createResponse();
   await timesheetController.getAdminApprovedSubmissions(
-    { user: admin, query: { limit: "500" } },
+    { user: admin, query: { limit: "abc" } },
     badLimit
   );
   assert.equal(badLimit.statusCode, 400);
@@ -305,6 +314,8 @@ test("unlock moves an approved submission to unlocked with audit and owner notif
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.data.status, "unlocked");
     assert.equal(res.body.data.reopenUntil, null);
+    assert.equal(res.body.data.deadline, "2026-11-25");
+    assert.equal(res.body.data.reopenFailed, false);
 
     const [{ filter, update }] = captured.submissionUpdates;
     assert.deepEqual(filter, { _id: submissionId, status: "approved" });
@@ -328,9 +339,14 @@ test("unlock moves an approved submission to unlocked with audit and owner notif
   }
 });
 
+// 2026-08-03 - 2026-08-09 has a 2026-09-09 deadline, already past for any run after it.
+const expiredPeriod = {
+  periodStart: new Date("2026-08-02T17:00:00.000Z"),
+  periodEnd: new Date("2026-08-08T17:00:00.000Z"),
+};
+
 test("unlocking a period past its deadline also reopens it", async () => {
-  const { captured, restore } = stubUnlockWrites();
-  periodAccess = { isExpired: true, isReopened: false };
+  const { captured, restore } = stubUnlockWrites({ submission: buildSubmission(expiredPeriod) });
   try {
     const res = createResponse();
     await timesheetController.unlockApprovedSubmission(
@@ -349,6 +365,54 @@ test("unlocking a period past its deadline also reopens it", async () => {
     assert.equal(res.body.data.reopenUntil, formatWorkDate(expected));
     assert.equal(auditCalls[0].metadata.reopenUntil, formatWorkDate(expected));
   } finally {
+    restore();
+  }
+});
+
+test("a reopenUntil beyond the deadline reopens a period that is not expired yet", async () => {
+  const { captured, restore } = stubUnlockWrites();
+  try {
+    const within = createResponse();
+    await timesheetController.unlockApprovedSubmission(
+      { user: admin, params: { id: submissionId }, body: { reason: "wrong hours", reopenUntil: "2026-11-20" } },
+      within
+    );
+    assert.equal(within.statusCode, 200);
+    assert.equal(captured.overrideUpserts.length, 0);
+
+    const beyond = createResponse();
+    await timesheetController.unlockApprovedSubmission(
+      { user: admin, params: { id: submissionId }, body: { reason: "wrong hours", reopenUntil: "2026-12-05" } },
+      beyond
+    );
+    assert.equal(beyond.statusCode, 200);
+    assert.equal(captured.overrideUpserts.length, 1);
+    assert.equal(beyond.body.data.reopenUntil, "2026-12-05");
+  } finally {
+    restore();
+  }
+});
+
+test("a failed reopen still keeps the unlock and reports reopenFailed", async () => {
+  const { captured, restore } = stubUnlockWrites({ submission: buildSubmission(expiredPeriod) });
+  const originalFindOneAndUpdate = TimesheetPeriodOverride.findOneAndUpdate;
+  TimesheetPeriodOverride.findOneAndUpdate = async () => {
+    throw new Error("db down");
+  };
+  try {
+    const res = createResponse();
+    await timesheetController.unlockApprovedSubmission(
+      { user: admin, params: { id: submissionId }, body: { reason: "wrong hours" } },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.data.status, "unlocked");
+    assert.equal(res.body.data.reopenFailed, true);
+    assert.equal(res.body.data.reopenUntil, null);
+    assert.equal(captured.submissionUpdates.length, 1);
+    assert.equal(captured.notifications.length, 1);
+  } finally {
+    TimesheetPeriodOverride.findOneAndUpdate = originalFindOneAndUpdate;
     restore();
   }
 });

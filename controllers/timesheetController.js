@@ -22,6 +22,7 @@ const {
   getWeeklyPeriodForWorkDate,
   formatWorkDate,
   getThailandDateKey,
+  getDeadlineDateKey,
 } = require("../utils/timesheet");
 const {
   ACTIVE_SUBMISSION_STATUSES,
@@ -1585,6 +1586,7 @@ const ADMIN_SUBMISSION_LIST_STATUSES = ["approved", "unlocked"];
 const MAX_ADMIN_SUBMISSION_PAGE_SIZE = 100;
 const MAX_UNLOCK_REASON_LENGTH = 500;
 const DEFAULT_UNLOCK_REOPEN_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const MIN_APPROVED_LIST_VIEWER_LEVEL = 3;
 
 const parsePositiveInt = (value, fallback) => {
@@ -1632,12 +1634,11 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
     }
 
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = parsePositiveInt(req.query.limit, 20);
-    if (!page || !limit || limit > MAX_ADMIN_SUBMISSION_PAGE_SIZE) {
-      return res.status(400).json({
-        message: `page must be a positive integer and limit must be between 1 and ${MAX_ADMIN_SUBMISSION_PAGE_SIZE}`,
-      });
+    const requestedLimit = parsePositiveInt(req.query.limit, 20);
+    if (!page || !requestedLimit) {
+      return res.status(400).json({ message: "page and limit must be positive integers" });
     }
+    const limit = Math.min(requestedLimit, MAX_ADMIN_SUBMISSION_PAGE_SIZE);
 
     const query = { status };
 
@@ -1650,7 +1651,12 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
 
     if (!viewerIsAdmin) {
       const scope = await getViewerDashboardScope(req.user);
-      restrictUserIds(scope.scope === "approver" ? scope.visibleUserIds : []);
+      if (!scope.canViewDashboard) {
+        return res.status(403).json({
+          message: "You do not have permission to view approved timesheets",
+        });
+      }
+      restrictUserIds(scope.visibleUserIds.map(String));
     }
 
     if (userId !== undefined) {
@@ -1688,6 +1694,12 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
     }
 
     if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) {
+        return res.status(200).json({
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 },
+        });
+      }
       query.userId = { $in: allowedUserIds };
     }
 
@@ -1717,6 +1729,45 @@ exports.getAdminApprovedSubmissions = async (req, res) => {
   } catch (error) {
     console.error("getAdminApprovedSubmissions error:", error);
     return res.status(500).json({ message: "Failed to fetch approved timesheet submissions" });
+  }
+};
+
+const ensureUnlockReopenOverride = async ({ submission, admin, reason, reopenUntil, now }) => {
+  const todayDate = parseWorkDate(getThailandDateKey(now));
+  const periodFilter = {
+    userId: submission.userId,
+    periodType: "week",
+    periodStart: submission.periodStart,
+    periodEnd: submission.periodEnd,
+  };
+
+  await TimesheetPeriodOverride.updateMany(
+    { ...periodFilter, isActive: true, reopenUntil: { $lt: todayDate } },
+    { $set: { isActive: false, closedAt: now } }
+  );
+
+  const upsertOverride = () =>
+    TimesheetPeriodOverride.findOneAndUpdate(
+      { ...periodFilter, isActive: true },
+      {
+        $max: { reopenUntil },
+        $setOnInsert: {
+          reopenedBy: admin._id,
+          reopenedAt: now,
+          reason: `Unlocked approved submission: ${reason}`,
+        },
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+  try {
+    return await upsertOverride();
+  } catch (error) {
+    // A concurrent upsert can lose the race on the active-override unique index; the retry matches it.
+    if (!isDuplicateKeyError(error)) {
+      throw error;
+    }
+    return upsertOverride();
   }
 };
 
@@ -1770,55 +1821,6 @@ exports.unlockApprovedSubmission = async (req, res) => {
       });
     }
 
-    const periodStartKey = formatWorkDate(submission.periodStart);
-    const periodEndKey = formatWorkDate(submission.periodEnd);
-    const access = await getTimesheetPeriodAccess({
-      userId: submission.userId,
-      periodStart: periodStartKey,
-    });
-
-    // Past the deadline the owner still cannot edit, so open the period as well.
-    let reopenUntil = null;
-    if (access?.isExpired) {
-      const todayDate = parseWorkDate(today);
-      const reopenUntilDate =
-        requestedReopenUntil ||
-        new Date(todayDate.getTime() + DEFAULT_UNLOCK_REOPEN_DAYS * 24 * 60 * 60 * 1000);
-      const periodFilter = {
-        userId: submission.userId,
-        periodType: "week",
-        periodStart: submission.periodStart,
-        periodEnd: submission.periodEnd,
-      };
-
-      await TimesheetPeriodOverride.updateMany(
-        { ...periodFilter, isActive: true, reopenUntil: { $lt: todayDate } },
-        { $set: { isActive: false, closedAt: new Date() } }
-      );
-
-      let override;
-      try {
-        override = await TimesheetPeriodOverride.findOneAndUpdate(
-          { ...periodFilter, isActive: true },
-          {
-            $max: { reopenUntil: reopenUntilDate },
-            $setOnInsert: {
-              reopenedBy: req.user._id,
-              reopenedAt: new Date(),
-              reason: `Unlocked approved submission: ${reason}`,
-            },
-          },
-          { new: true, upsert: true, setDefaultsOnInsert: true }
-        );
-      } catch (error) {
-        if (!isDuplicateKeyError(error)) {
-          throw error;
-        }
-        override = await TimesheetPeriodOverride.findOne({ ...periodFilter, isActive: true });
-      }
-      reopenUntil = override ? formatWorkDate(override.reopenUntil) : null;
-    }
-
     const now = new Date();
     const updated = await TimesheetSubmission.findOneAndUpdate(
       { _id: submission._id, status: "approved" },
@@ -1835,8 +1837,38 @@ exports.unlockApprovedSubmission = async (req, res) => {
     );
     if (!updated) {
       return res.status(409).json({
-        message: "Only approved timesheet submissions can be unlocked",
+        message: "This timesheet submission was changed by another request",
       });
+    }
+
+    const periodStartKey = formatWorkDate(updated.periodStart);
+    const periodEndKey = formatWorkDate(updated.periodEnd);
+    const deadline = getDeadlineDateKey(updated.periodEnd);
+
+    // Without an active override the owner cannot edit a period past its
+    // deadline, so reopen it when the deadline has passed or the admin asked
+    // for an edit window that runs beyond it.
+    let reopenUntil = null;
+    let reopenFailed = false;
+    const extendsPastDeadline =
+      Boolean(requestedReopenUntil) && formatWorkDate(requestedReopenUntil) > deadline;
+    if (today > deadline || extendsPastDeadline) {
+      try {
+        const override = await ensureUnlockReopenOverride({
+          submission: updated,
+          admin: req.user,
+          reason,
+          reopenUntil:
+            requestedReopenUntil ||
+            new Date(parseWorkDate(today).getTime() + DEFAULT_UNLOCK_REOPEN_DAYS * DAY_MS),
+          now,
+        });
+        reopenUntil = override ? formatWorkDate(override.reopenUntil) : null;
+      } catch (error) {
+        // The unlock is already saved; the admin can still reopen the period separately.
+        console.error("unlockApprovedSubmission reopen error:", error);
+        reopenFailed = true;
+      }
     }
 
     await logTimesheetActivity({
@@ -1854,13 +1886,20 @@ exports.unlockApprovedSubmission = async (req, res) => {
         reopenUntil,
       },
     });
-    await notifySubmissionUnlocked({ submission: updated, admin: req.user, reason });
+    await notifySubmissionUnlocked({
+      submission: updated,
+      admin: req.user,
+      reason,
+      reopenUntil,
+    });
 
     return res.status(200).json({
       message: "Timesheet submission unlocked successfully",
       data: {
         ...buildSubmissionResponse(updated.toObject()),
+        deadline,
         reopenUntil,
+        reopenFailed,
       },
     });
   } catch (error) {
