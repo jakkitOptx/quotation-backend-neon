@@ -34,6 +34,7 @@ const {
   notifySubmissionCreated,
   notifySubmissionApproved,
   notifySubmissionRejected,
+  notifySubmissionUnlocked,
   removeSubmissionNotifications,
 } = require("../services/timesheetNotificationService");
 
@@ -85,7 +86,7 @@ const TIMESHEET_ENTRY_DUPLICATE_MESSAGE =
 const TIMESHEET_PERIOD_LOCKED_MESSAGE = "This timesheet period is locked";
 const TIMESHEET_PERIOD_DEADLINE_MESSAGE =
   "This timesheet period is past the submission deadline";
-const SUBMISSION_STATUSES = ["pending", "approved", "rejected", "withdrawn"];
+const SUBMISSION_STATUSES = ["pending", "approved", "rejected", "withdrawn", "unlocked"];
 // Three consecutive calendar months contain at most 92 days.
 const MAX_DASHBOARD_EXPORT_DAYS = 92;
 
@@ -1577,6 +1578,275 @@ exports.getAdminReopenStatus = async (req, res) => {
   } catch (error) {
     console.error("getAdminReopenStatus error:", error);
     return res.status(500).json({ message: "Failed to fetch timesheet reopen status" });
+  }
+};
+
+const ADMIN_SUBMISSION_LIST_STATUSES = ["approved", "unlocked"];
+const MAX_ADMIN_SUBMISSION_PAGE_SIZE = 100;
+const MAX_UNLOCK_REASON_LENGTH = 500;
+const DEFAULT_UNLOCK_REOPEN_DAYS = 7;
+
+const parsePositiveInt = (value, fallback) => {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const buildUserSummary = (user) =>
+  user && user._id
+    ? {
+        _id: String(user._id),
+        username: user.username || "",
+        displayName: formatUserDisplayName(user),
+        department: user.department || "",
+      }
+    : null;
+
+const buildAdminSubmissionResponse = (submission) => ({
+  ...buildSubmissionResponse(submission),
+  userId: submission.userId?._id ? String(submission.userId._id) : String(submission.userId),
+  user: buildUserSummary(submission.userId),
+  unlockedBy: buildUserSummary(submission.unlockedBy),
+  canUnlock: submission.status === "approved",
+});
+
+exports.getAdminApprovedSubmissions = async (req, res) => {
+  try {
+    if (!isAdmin(req.user)) {
+      return res.status(403).json({ message: "Admin access is required" });
+    }
+
+    const { userId, from, to, search } = req.query;
+    const status = req.query.status ?? "approved";
+    if (!ADMIN_SUBMISSION_LIST_STATUSES.includes(status)) {
+      return res.status(400).json({ message: "status must be approved or unlocked" });
+    }
+
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = parsePositiveInt(req.query.limit, 20);
+    if (!page || !limit || limit > MAX_ADMIN_SUBMISSION_PAGE_SIZE) {
+      return res.status(400).json({
+        message: `page must be a positive integer and limit must be between 1 and ${MAX_ADMIN_SUBMISSION_PAGE_SIZE}`,
+      });
+    }
+
+    const query = { status };
+
+    if (userId !== undefined) {
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ message: "Valid userId is required" });
+      }
+      query.userId = userId;
+    }
+
+    if (from !== undefined || to !== undefined) {
+      const range = parseDateRange(from, to);
+      if (!range) {
+        return res.status(400).json({ message: "Valid from and to dates are required" });
+      }
+
+      query.periodStart = { $lt: range.endExclusive };
+      query.periodEnd = { $gte: range.start };
+    }
+
+    const keyword = String(search || "").trim();
+    if (keyword) {
+      const pattern = new RegExp(escapeRegex(keyword), "i");
+      const matchedUsers = await User.find(
+        {
+          $or: [
+            { username: pattern },
+            { firstName: pattern },
+            { lastName: pattern },
+            { nickname: pattern },
+          ],
+        },
+        "_id"
+      ).lean();
+      const matchedIds = matchedUsers.map((user) => String(user._id));
+      query.userId = {
+        $in: query.userId
+          ? matchedIds.filter((matchedId) => matchedId === String(query.userId))
+          : matchedIds,
+      };
+    }
+
+    const sortField = status === "unlocked" ? "unlockedAt" : "approvedAt";
+    const [total, submissions] = await Promise.all([
+      TimesheetSubmission.countDocuments(query),
+      TimesheetSubmission.find(query)
+        .sort({ [sortField]: -1, periodStart: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate("userId", "username firstName lastName department")
+        .populate("unlockedBy", "username firstName lastName department")
+        .lean(),
+    ]);
+
+    return res.status(200).json({
+      data: submissions.map(buildAdminSubmissionResponse),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("getAdminApprovedSubmissions error:", error);
+    return res.status(500).json({ message: "Failed to fetch approved timesheet submissions" });
+  }
+};
+
+// Unlocking moves an approved submission out of the active statuses so the
+// owner can edit the period and submit it through the ApproveFlow again.
+exports.unlockApprovedSubmission = async (req, res) => {
+  try {
+    if (!isAdmin(req.user)) {
+      return res.status(403).json({ message: "Admin access is required" });
+    }
+
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid submission id" });
+    }
+
+    const reason = String(req.body?.reason || "").trim();
+    if (!reason) {
+      return res.status(400).json({ message: "An unlock reason is required" });
+    }
+    if (reason.length > MAX_UNLOCK_REASON_LENGTH) {
+      return res.status(400).json({
+        message: `Unlock reason must be at most ${MAX_UNLOCK_REASON_LENGTH} characters`,
+      });
+    }
+
+    const today = getThailandDateKey();
+    let requestedReopenUntil = null;
+    if (req.body?.reopenUntil !== undefined && req.body?.reopenUntil !== null) {
+      requestedReopenUntil = parseWorkDate(req.body.reopenUntil);
+      if (!requestedReopenUntil) {
+        return res.status(400).json({
+          message: "reopenUntil must be a valid date in YYYY-MM-DD format",
+        });
+      }
+      if (formatWorkDate(requestedReopenUntil) < today) {
+        return res.status(400).json({
+          message: "reopenUntil cannot be before today in Asia/Bangkok",
+        });
+      }
+    }
+
+    const submission = await TimesheetSubmission.findById(id).lean();
+    if (!submission) {
+      return res.status(404).json({ message: "Timesheet submission not found" });
+    }
+
+    if (submission.status !== "approved") {
+      return res.status(409).json({
+        message: "Only approved timesheet submissions can be unlocked",
+      });
+    }
+
+    const periodStartKey = formatWorkDate(submission.periodStart);
+    const periodEndKey = formatWorkDate(submission.periodEnd);
+    const access = await getTimesheetPeriodAccess({
+      userId: submission.userId,
+      periodStart: periodStartKey,
+    });
+
+    // Past the deadline the owner still cannot edit, so open the period as well.
+    let reopenUntil = null;
+    if (access?.isExpired) {
+      const todayDate = parseWorkDate(today);
+      const reopenUntilDate =
+        requestedReopenUntil ||
+        new Date(todayDate.getTime() + DEFAULT_UNLOCK_REOPEN_DAYS * 24 * 60 * 60 * 1000);
+      const periodFilter = {
+        userId: submission.userId,
+        periodType: "week",
+        periodStart: submission.periodStart,
+        periodEnd: submission.periodEnd,
+      };
+
+      await TimesheetPeriodOverride.updateMany(
+        { ...periodFilter, isActive: true, reopenUntil: { $lt: todayDate } },
+        { $set: { isActive: false, closedAt: new Date() } }
+      );
+
+      let override;
+      try {
+        override = await TimesheetPeriodOverride.findOneAndUpdate(
+          { ...periodFilter, isActive: true },
+          {
+            $max: { reopenUntil: reopenUntilDate },
+            $setOnInsert: {
+              reopenedBy: req.user._id,
+              reopenedAt: new Date(),
+              reason: `Unlocked approved submission: ${reason}`,
+            },
+          },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) {
+          throw error;
+        }
+        override = await TimesheetPeriodOverride.findOne({ ...periodFilter, isActive: true });
+      }
+      reopenUntil = override ? formatWorkDate(override.reopenUntil) : null;
+    }
+
+    const now = new Date();
+    const updated = await TimesheetSubmission.findOneAndUpdate(
+      { _id: submission._id, status: "approved" },
+      {
+        $set: {
+          status: "unlocked",
+          currentApprovalLevel: null,
+          unlockedAt: now,
+          unlockedBy: req.user._id,
+          unlockReason: reason,
+        },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(409).json({
+        message: "Only approved timesheet submissions can be unlocked",
+      });
+    }
+
+    await logTimesheetActivity({
+      actor: req.user.username,
+      action: "submission_unlocked",
+      description: `Unlocked approved Timesheet ${periodStartKey} - ${periodEndKey}`,
+      entityId: updated._id,
+      metadata: {
+        userId: String(updated.userId),
+        periodStart: periodStartKey,
+        periodEnd: periodEndKey,
+        totalHours: updated.totalHours,
+        approvedAt: submission.approvedAt,
+        reason,
+        reopenUntil,
+      },
+    });
+    await notifySubmissionUnlocked({ submission: updated, admin: req.user, reason });
+
+    return res.status(200).json({
+      message: "Timesheet submission unlocked successfully",
+      data: {
+        ...buildSubmissionResponse(updated.toObject()),
+        reopenUntil,
+      },
+    });
+  } catch (error) {
+    console.error("unlockApprovedSubmission error:", error);
+    return res.status(500).json({ message: "Failed to unlock timesheet submission" });
   }
 };
 
