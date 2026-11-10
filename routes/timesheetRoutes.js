@@ -18,6 +18,10 @@ router.post(
 );
 router.get("/period-status", timesheetController.getMyPeriodStatus);
 router.get("/overview", timesheetController.getOverview);
+router.get(
+  "/clone-week-template",
+  timesheetController.getLatestWeekCloneTemplate
+);
 
 router.get("/projects", timesheetController.getProjects);
 router.post("/projects", timesheetController.createProject);

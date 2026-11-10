@@ -537,6 +537,95 @@ exports.getProjects = async (req, res) => {
   }
 };
 
+exports.getLatestWeekCloneTemplate = async (req, res) => {
+  try {
+    const targetPeriod = getWeeklyPeriod(req.query?.periodStart);
+    if (!targetPeriod) {
+      return res.status(400).json({
+        message: "periodStart must be a valid Monday in YYYY-MM-DD format",
+      });
+    }
+
+    const access = await getTimesheetPeriodAccess({
+      userId: req.user._id,
+      periodStart: targetPeriod.periodStartKey,
+    });
+    if (!access?.canEdit) {
+      return respondPeriodAccessBlock(res, access);
+    }
+
+    const latestEntry = await TimesheetEntry.findOne({
+      userId: req.user._id,
+      workDate: { $lt: targetPeriod.periodStart },
+    })
+      .sort({ workDate: -1, createdAt: -1 })
+      .select("workDate")
+      .lean();
+
+    if (!latestEntry) {
+      return res.status(200).json({
+        sourcePeriod: null,
+        targetPeriod: {
+          periodStart: targetPeriod.periodStartKey,
+          periodEnd: targetPeriod.periodEndKey,
+        },
+        data: [],
+      });
+    }
+
+    const sourcePeriod = getWeeklyPeriodForWorkDate(latestEntry.workDate);
+    const sourceEndExclusive = new Date(
+      sourcePeriod.periodEnd.getTime() + 24 * 60 * 60 * 1000
+    );
+    const sourceEntries = await TimesheetEntry.find({
+      userId: req.user._id,
+      workDate: {
+        $gte: sourcePeriod.periodStart,
+        $lt: sourceEndExclusive,
+      },
+    })
+      .sort({ workDate: 1, createdAt: 1 })
+      .populate("clientId", CLIENT_SELECT_FIELDS)
+      .populate("projectId", "name clientId remark isActive")
+      .lean();
+
+    const projects = new Map();
+    sourceEntries.forEach((entry) => {
+      const project = entry.projectId;
+      const client = entry.clientId;
+      if (!project?.isActive || !client?._id) return;
+
+      const projectId = String(project._id);
+      if (projects.has(projectId)) return;
+
+      projects.set(projectId, {
+        clientId: String(client._id),
+        clientName: client.customerName || client.companyBaseName || "",
+        projectId,
+        projectName: project.name || "",
+        remark: project.remark || "",
+      });
+    });
+
+    return res.status(200).json({
+      sourcePeriod: {
+        periodStart: sourcePeriod.periodStartKey,
+        periodEnd: sourcePeriod.periodEndKey,
+      },
+      targetPeriod: {
+        periodStart: targetPeriod.periodStartKey,
+        periodEnd: targetPeriod.periodEndKey,
+      },
+      data: [...projects.values()],
+    });
+  } catch (error) {
+    console.error("getLatestWeekCloneTemplate error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch the latest Timesheet week template",
+    });
+  }
+};
+
 exports.createProject = async (req, res) => {
   try {
     const { clientId, name } = req.body;
