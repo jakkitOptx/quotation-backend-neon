@@ -224,6 +224,7 @@ const aggregateHierarchicalSummary = async ({
   clientId,
   projectId,
   includeInactiveProjects = false,
+  shouldIncludeInactiveProjectEntry = () => true,
 }) => {
   const match = {
     userId: { $in: userIds },
@@ -288,6 +289,7 @@ const aggregateHierarchicalSummary = async ({
         clientName: { $first: "$client.customerName" },
         projectName: { $first: "$project.name" },
         projectRemark: { $first: "$project.remark" },
+        projectIsActive: { $first: "$project.isActive" },
         dayHours: { $sum: "$hours" },
       },
     },
@@ -307,6 +309,13 @@ const aggregateHierarchicalSummary = async ({
   let totalHours = 0;
 
   summary.forEach((item) => {
+    if (
+      item.projectIsActive === false &&
+      !shouldIncludeInactiveProjectEntry(item._id.workDate)
+    ) {
+      return;
+    }
+
     totalHours += item.dayHours;
 
     const userKey = String(item._id.userId);
@@ -352,6 +361,7 @@ const aggregateHierarchicalSummary = async ({
         projectId: item._id.projectId,
         name: item.projectName,
         remark: item.projectRemark || "",
+        isActive: item.projectIsActive !== false,
         dailyHours,
         totalHours: 0,
       });
@@ -378,6 +388,7 @@ const aggregateHierarchicalSummary = async ({
         projectId: project.projectId,
         name: project.name,
         remark: project.remark || "",
+        isActive: project.isActive,
         dailyHours: project.dailyHours,
         totalHours: Number(project.totalHours.toFixed(2)),
       })),
@@ -390,10 +401,16 @@ const aggregateHierarchicalSummary = async ({
   };
 };
 
-const getTimesheetSummaryForUser = async (userId, range) => {
+const getTimesheetSummaryForUser = async (
+  userId,
+  range,
+  shouldIncludeInactiveProjectEntry
+) => {
   const aggregated = await aggregateHierarchicalSummary({
     userIds: [userId],
     range,
+    includeInactiveProjects: true,
+    shouldIncludeInactiveProjectEntry,
   });
   const userSummary = aggregated.users[0];
 
@@ -590,13 +607,20 @@ exports.getLatestWeekCloneTemplate = async (req, res) => {
       .lean();
 
     const projects = new Map();
+    const archivedProjectIds = new Set();
+    const shouldReactivateArchivedProjects = req.method === "POST";
     sourceEntries.forEach((entry) => {
       const project = entry.projectId;
       const client = entry.clientId;
-      if (!project?.isActive || !client?._id) return;
+      if (!project || !client?._id) return;
+      if (!project.isActive && !shouldReactivateArchivedProjects) return;
 
       const projectId = String(project._id);
       if (projects.has(projectId)) return;
+
+      if (!project.isActive) {
+        archivedProjectIds.add(projectId);
+      }
 
       projects.set(projectId, {
         clientId: String(client._id),
@@ -606,6 +630,17 @@ exports.getLatestWeekCloneTemplate = async (req, res) => {
         remark: project.remark || "",
       });
     });
+
+    if (archivedProjectIds.size) {
+      await TimesheetProject.updateMany(
+        {
+          _id: { $in: [...archivedProjectIds] },
+          userId: req.user._id,
+          isActive: false,
+        },
+        { $set: { isActive: true } }
+      );
+    }
 
     return res.status(200).json({
       sourcePeriod: {
@@ -1126,15 +1161,13 @@ exports.getEntries = async (req, res) => {
 
     return res.status(200).json({
       range: { from: range.from, to: range.to },
-      data: entries
-        .filter((entry) => entry.projectId?.isActive)
-        .map((entry) =>
-          normalizeEntryOutput({
-            ...entry,
-            client: entry.clientId,
-            project: entry.projectId,
-          })
-        ),
+      data: entries.map((entry) =>
+        normalizeEntryOutput({
+          ...entry,
+          client: entry.clientId,
+          project: entry.projectId,
+        })
+      ),
     });
   } catch (error) {
     console.error("getEntries error:", error);
@@ -2457,6 +2490,17 @@ exports.saveEntriesBatch = async (req, res) => {
   try {
     const entries = req.body?.entries ?? [];
     const deleteEntryIds = req.body?.deleteEntryIds ?? [];
+    const requestedRange = req.body?.range;
+
+    let saveRange = null;
+    if (requestedRange !== undefined) {
+      saveRange = parseDateRange(requestedRange?.from, requestedRange?.to);
+      if (!saveRange) {
+        return res.status(400).json({
+          message: "range.from and range.to must be valid YYYY-MM-DD dates",
+        });
+      }
+    }
 
     if (!Array.isArray(entries) || !Array.isArray(deleteEntryIds)) {
       return res.status(400).json({
@@ -2529,6 +2573,19 @@ exports.saveEntriesBatch = async (req, res) => {
     if (entriesToDelete.length !== uniqueDeleteIds.length) {
       return res.status(404).json({
         message: "One or more Timesheet entries to delete were not found",
+      });
+    }
+
+    if (
+      saveRange &&
+      [...normalizedEntries, ...entriesToDelete].some(
+        (entry) =>
+          entry.workDate < saveRange.start ||
+          entry.workDate >= saveRange.endExclusive
+      )
+    ) {
+      return res.status(400).json({
+        message: "Every Timesheet change must belong to the selected date range",
       });
     }
 
@@ -2677,8 +2734,7 @@ exports.getOverview = async (req, res) => {
     };
     const weeklyPeriods = getWeeklyPeriodsForRange(range);
 
-    const [summary, entries, submissions, periodStatuses] = await Promise.all([
-      getTimesheetSummaryForUser(req.user._id, range),
+    const [entries, submissions, periodStatuses] = await Promise.all([
       TimesheetEntry.find(entryQuery)
         .sort({ workDate: 1, createdAt: 1 })
         .populate("clientId", CLIENT_SELECT_FIELDS)
@@ -2696,12 +2752,32 @@ exports.getOverview = async (req, res) => {
         )
       ),
     ]);
+    const accessByPeriodStart = new Map(
+      periodStatuses.map((access) => [access.periodStart, access])
+    );
+    const shouldIncludeInactiveProjectEntry = (workDate) => {
+      const period = getWeeklyPeriodForWorkDate(workDate);
+      const access = period && accessByPeriodStart.get(period.periodStartKey);
+
+      // An archived Project stays visible only in locked historical periods.
+      // In an editable period, archiving is the user's delete action.
+      return !access || access.canEdit !== true;
+    };
+    const summary = await getTimesheetSummaryForUser(
+      req.user._id,
+      range,
+      shouldIncludeInactiveProjectEntry
+    );
 
     return res.status(200).json({
       range: { from: range.from, to: range.to },
       summary,
       entries: entries
-        .filter((entry) => entry.projectId?.isActive)
+        .filter(
+          (entry) =>
+            entry.projectId?.isActive !== false ||
+            shouldIncludeInactiveProjectEntry(entry.workDate)
+        )
         .map((entry) =>
           normalizeEntryOutput({
             ...entry,
@@ -3035,6 +3111,7 @@ exports.getDashboardUserSummary = async (req, res) => {
     const aggregated = await aggregateHierarchicalSummary({
       userIds: [targetUser._id],
       range,
+      includeInactiveProjects: true,
     });
     const userSummary = aggregated.users[0];
 

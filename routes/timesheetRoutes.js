@@ -22,6 +22,10 @@ router.get(
   "/clone-week-template",
   timesheetController.getLatestWeekCloneTemplate
 );
+router.post(
+  "/clone-week-template",
+  timesheetController.getLatestWeekCloneTemplate
+);
 
 router.get("/projects", timesheetController.getProjects);
 router.post("/projects", timesheetController.createProject);
