@@ -16,6 +16,7 @@ require.cache[periodAccessPath] = {
 };
 
 const TimesheetEntry = require("../models/TimesheetEntry");
+const TimesheetProject = require("../models/TimesheetProject");
 const {
   getLatestWeekCloneTemplate,
 } = require("../controllers/timesheetController");
@@ -164,6 +165,65 @@ test("returns an empty template when the user has no earlier Timesheet week", as
     assert.deepEqual(res.data.data, []);
   } finally {
     TimesheetEntry.findOne = originalFindOne;
+  }
+});
+
+test("clones and reactivates archived Projects when requested", async () => {
+  const originalFindOne = TimesheetEntry.findOne;
+  const originalFind = TimesheetEntry.find;
+  const originalUpdateMany = TimesheetProject.updateMany;
+  const userId = "aaaaaaaaaaaaaaaaaaaaaaaa";
+  const clientId = "bbbbbbbbbbbbbbbbbbbbbbbb";
+  const projectId = "cccccccccccccccccccccccc";
+  let reactivationFilter;
+
+  TimesheetEntry.findOne = () => ({
+    sort() { return this; },
+    select() { return this; },
+    lean: async () => ({ workDate: new Date("2026-10-25T17:00:00.000Z") }),
+  });
+  TimesheetEntry.find = () =>
+    createFindQuery([
+      {
+        clientId: { _id: clientId, customerName: "Example Client" },
+        projectId: { _id: projectId, name: "Archived", remark: "Old work", isActive: false },
+      },
+    ]);
+  TimesheetProject.updateMany = async (filter) => {
+    reactivationFilter = filter;
+  };
+
+  const res = createResponse();
+  try {
+    canEditTargetPeriod = true;
+    await getLatestWeekCloneTemplate(
+      {
+        method: "POST",
+        user: { _id: userId },
+        query: { periodStart: "2026-11-02" },
+      },
+      res
+    );
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.data.data, [
+      {
+        clientId,
+        clientName: "Example Client",
+        projectId,
+        projectName: "Archived",
+        remark: "Old work",
+      },
+    ]);
+    assert.deepEqual(reactivationFilter, {
+      _id: { $in: [projectId] },
+      userId,
+      isActive: false,
+    });
+  } finally {
+    TimesheetEntry.findOne = originalFindOne;
+    TimesheetEntry.find = originalFind;
+    TimesheetProject.updateMany = originalUpdateMany;
   }
 });
 

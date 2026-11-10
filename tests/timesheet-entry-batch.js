@@ -119,3 +119,39 @@ test("batch saves multiple dates with one bulk write", async () => {
     TimesheetEntry.bulkWrite = originals.entryBulkWrite;
   }
 });
+
+test("rejects a batch entry outside the requested screen range", async () => {
+  const req = {
+    body: {
+      range: { from: "2026-11-02", to: "2026-11-08" },
+      entries: [
+        {
+          clientId: "bbbbbbbbbbbbbbbbbbbbbbbb",
+          projectId: "cccccccccccccccccccccccc",
+          workDate: "2026-11-09",
+          hours: 1,
+        },
+      ],
+      deleteEntryIds: [],
+    },
+    user: { _id: "aaaaaaaaaaaaaaaaaaaaaaaa", username: "user@example.com" },
+  };
+  const res = {
+    statusCode: 200,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(data) {
+      this.data = data;
+      return this;
+    },
+  };
+
+  await saveEntriesBatch(req, res);
+  assert.equal(res.statusCode, 400);
+  assert.equal(
+    res.data.message,
+    "Every Timesheet change must belong to the selected date range"
+  );
+});
