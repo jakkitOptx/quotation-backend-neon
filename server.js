@@ -73,6 +73,7 @@ const timesheetRoutes = require("./routes/timesheetRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 
 app.use("/api/quotations", quotationRoutes);
+app.use("/api/purchase-requests", require("./routes/purchaseRequestRoutes"));
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
