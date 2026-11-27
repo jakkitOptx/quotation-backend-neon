@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const PurchaseRequest = require('../models/PurchaseRequest');
-const { buildFlow, applyAction, fullName, accessFilter } = require('../services/purchaseRequestService');
+const { buildFlow, applyAction, applyEdit, applyCancel, mapItems, fullName, accessFilter } = require('../services/purchaseRequestService');
 const handle = fn => async (req, res) => {
   try { await fn(req, res); } catch (error) {
     const status = error.name === 'VersionError' ? 409 :
@@ -24,9 +24,7 @@ exports.create = handle(async (req, res) => {
     documentDate: body.documentDate || new Date(),
     purchaseReason: body.purchaseReason, otherReason: body.otherReason,
     assetCode: body.assetCode, urgency: body.urgency, requiredDate: body.requiredDate,
-    items: Array.isArray(body.items) ? body.items.map(item => ({
-      quantity: item.quantity, description: item.description, unitPrice: item.unitPrice, note: item.note,
-    })) : [],
+    items: mapItems(body.items),
     ...flow,
   });
   await doc.save();
@@ -46,6 +44,18 @@ exports.get = handle(async (req, res) => res.json(await load(req)));
 exports.act = handle(async (req, res) => {
   const doc = await load(req);
   applyAction(doc, req.user, req.body);
+  await doc.save();
+  res.json(doc);
+});
+exports.update = handle(async (req, res) => {
+  const doc = await load(req);
+  applyEdit(doc, req.user, req.body);
+  await doc.save();
+  res.json(doc);
+});
+exports.cancel = handle(async (req, res) => {
+  const doc = await load(req);
+  applyCancel(doc, req.user);
   await doc.save();
   res.json(doc);
 });

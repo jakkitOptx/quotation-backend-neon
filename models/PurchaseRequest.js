@@ -36,8 +36,15 @@ const schema = new mongoose.Schema({
   }],
   approvalFlowId: { type: mongoose.Schema.Types.ObjectId, ref: 'ApproveFlow', required: true },
   approvalSteps: { type: [stepSchema], required: true },
-  status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'Completed'], default: 'Pending' },
+  status: { type: String, enum: ['Pending', 'Approved', 'Rejected', 'Completed', 'Cancelled'], default: 'Pending' },
   expectedDeliveryDate: Date,
+  // Rejections kept when the creator edits and resubmits a rejected request.
+  rejectionHistory: [{
+    role: String, approver: String, name: String, reason: String, actedAt: Date, actedBy: String,
+    _id: false,
+  }],
+  resubmittedAt: Date,
+  cancelledAt: Date,
 }, { timestamps: true, optimisticConcurrency: true });
 
 schema.pre('validate', function(next) {

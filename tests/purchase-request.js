@@ -4,9 +4,20 @@ const mongoose = require('mongoose');
 const PurchaseRequest = require('../models/PurchaseRequest');
 const User = require('../models/User');
 const ApproveFlow = require('../models/ApproveFlow');
-const { buildFlow, applyAction, canAct, accessFilter } = require('../services/purchaseRequestService');
+const { buildFlow, applyAction, applyEdit, applyCancel, canAct, accessFilter } = require('../services/purchaseRequestService');
 const id = () => new mongoose.Types.ObjectId();
 const managerId = id(), approverId = id(), adminId = id();
+const neonAdminId = id();
+process.env.PURCHASE_REQUEST_ADMIN_USER_ID = String(neonAdminId);
+const natornId = id();
+const mockNeonAdminExists = t => {
+  t.mock.method(User, 'exists', async filter => (
+    String(filter._id) === String(neonAdminId) ? { _id: neonAdminId } : null
+  ));
+  t.mock.method(User, 'findOne', filter => ({
+    select: async () => (filter.username === 'natorn@neonworks.co.th' ? { _id: natornId, username: filter.username } : null),
+  }));
+};
 const makeDoc = () => new PurchaseRequest({
   createdByUser: id(), preparedBy: 'Test User', managerName: 'Manager Test', documentDate: new Date(),
   purchaseReason: 'Other', otherReason: 'New equipment', urgency: 'High',
@@ -58,39 +69,53 @@ test('rejection needs reason and closes the request', () => {
 test('display names do not trigger any account lookup; QT flow supplies actual assignees', async t => {
   const requester = { _id: id(), flow: id() };
   t.mock.method(ApproveFlow, 'findById', async () => ({ _id: requester.flow, approvalHierarchy: [
-    { level: 5, approver: 'FINAL@example.com', status: 'Approved' },
-    { level: 3, approver: 'manager@example.com' },
-    { level: 4, approver: 'head@example.com' },
+    { level: 5, approver: 'later@example.com', status: 'Approved' },
+    { level: 2, approver: 'staff@example.com' },
+    { level: 3, approver: 'HEAD@example.com' },
+    { level: 4, approver: 'Natorn@neonworks.co.th' },
   ] }));
   t.mock.method(User, 'find', () => { throw new Error('Must not look up names'); });
+  mockNeonAdminExists(t);
   const flow = await buildFlow(requester, 'กชลี สุริยะกำพล');
   assert.equal(flow.managerName, 'กชลี สุริยะกำพล');
   assert.equal(flow.finalApproverName, 'NATORN MANEEKORN');
   assert.equal(flow.adminName, 'SUREERAT JANHOM');
   assert.deepEqual(flow.approvalSteps.map(step => step.approver), [
-    'manager@example.com', 'head@example.com', 'final@example.com', undefined,
+    'head@example.com', 'natorn@neonworks.co.th', undefined,
   ]);
+  assert.deepEqual(flow.approvalSteps.map(step => step.role), ['manager', 'approver', 'admin']);
+  assert.equal(String(flow.approvalSteps[1].userId), String(natornId));
+  assert.equal(flow.approvalSteps[1].level, 4);
   assert.ok(flow.approvalSteps.every(step => step.status === 'Pending'));
+  assert.equal(String(flow.approvalSteps[2].userId), String(neonAdminId));
+  assert.equal(flow.approvalSteps[2].identityName, undefined);
   const doc = makeDoc();
   doc.approvalSteps = flow.approvalSteps;
   await doc.validate();
-  assert.throws(() => applyAction(doc, { username: 'final@example.com' }, { status: 'Approved' }), /current approver/);
-  for (const username of ['manager@example.com', 'head@example.com', 'FINAL@example.com']) {
-    applyAction(doc, { username }, { status: 'Approved' });
-  }
+  assert.throws(() => applyAction(doc, { _id: natornId }, { status: 'Approved' }), /current approver/);
+  applyAction(doc, { username: 'head@example.com' }, { status: 'Approved' });
+  assert.equal(doc.status, 'Pending');
+  // Natorn's step is bound to his user ID; the email alone does not grant it.
+  assert.throws(() => applyAction(doc, { _id: id(), username: 'natorn@neonworks.co.th' }, { status: 'Approved' }), /current approver/);
+  applyAction(doc, { _id: natornId, username: 'natorn@neonworks.co.th' }, { status: 'Approved' });
   assert.equal(doc.status, 'Approved');
-  assert.throws(() => applyAction(doc, { firstName: 'Other', lastName: 'Admin' }, { status: 'Approved' }), /current approver/);
-  applyAction(doc, { firstName: 'Sureerat', lastName: 'Janhom', username: 'admin@example.com' }, { status: 'Approved' });
+  assert.throws(() => applyAction(doc, { _id: id(), firstName: 'Other', lastName: 'Admin' }, { status: 'Approved' }), /current approver/);
+  // Renaming an account to the admin's name must not grant the admin step.
+  assert.throws(() => applyAction(doc, { _id: id(), firstName: 'Sureerat', lastName: 'Janhom' }, { status: 'Approved' }), /current approver/);
+  applyAction(doc, { _id: neonAdminId, firstName: 'Any', lastName: 'Name', username: 'admin@example.com' }, { status: 'Approved' });
   assert.equal(doc.status, 'Completed');
-  assert.equal(doc.approvalSteps[3].actedBy, 'admin@example.com');
+  assert.equal(doc.approvalSteps[2].actedBy, 'admin@example.com');
   await assert.rejects(buildFlow(requester, '  '), /managerName is required/);
   await assert.rejects(buildFlow(requester, { name: 'Manager Test' }), /managerName is required/);
 });
 
-test('participants can read by flow email or admin name, with escaped email matching', () => {
+test('participants can read by flow email or admin user ID, with escaped email matching', () => {
   const user = { _id: id(), username: 'A+B@example.com', firstName: 'SUREERAT', lastName: 'JANHOM' };
   const filter = accessFilter(user);
-  assert.ok(filter.$or.some(clause => clause['approvalSteps.identityName'] === 'sureerat janhom'));
+  assert.ok(!filter.$or.some(clause => 'approvalSteps.identityName' in clause), 'name must not grant read access');
+  const adminFilter = accessFilter({ _id: neonAdminId, username: 'sureerat@neonworks.co.th' });
+  assert.ok(adminFilter.$or.some(clause => String(clause['approvalSteps.userId']) === String(neonAdminId)));
+  assert.ok(adminFilter.$or.some(clause => clause['approvalSteps.identityName'] === 'sureerat janhom'));
   const regex = filter.$or.find(clause => clause['approvalSteps.approver'])['approvalSteps.approver'];
   assert.ok(regex.test('a+b@example.com'));
   assert.ok(!regex.test('aaab@exampleXcom'));
@@ -104,6 +129,7 @@ test('reported payload creates successfully without fixed-name or manager accoun
     { level: 3, approver: 'manager@example.com' }, { level: 5, approver: 'final@example.com' },
   ] }));
   t.mock.method(User, 'find', () => { throw new Error('Unexpected account lookup'); });
+  mockNeonAdminExists(t);
   t.mock.method(PurchaseRequest.prototype, 'save', async function() { await this.validate(); return this; });
   const body = { managerName: 'กชลี สุริยะกำพล', documentDate: '2026-11-25', purchaseReason: 'Lost', otherReason: '', assetCode: '32456', urgency: 'Medium', requiredDate: '2026-12-01', items: [{ quantity: 1, description: 'เมาส์', unitPrice: 333, note: '' }] };
   let code, result;
@@ -121,6 +147,7 @@ test('OPTX uses CHAWACHAI labels and the same QT level 5 account approves final 
     { level: 3, approver: 'manager@optxfi.com' },
   ] }));
   t.mock.method(User, 'find', () => { throw new Error('Must not look up fixed names'); });
+  mockNeonAdminExists(t);
   for (const requester of [
     { company: ' optx ', username: 'requester@example.com' },
     { company: 'OPTXFI', username: 'requester@example.com' },
@@ -161,4 +188,122 @@ test('OPTX requires an unambiguous level 5 account in its QT flow', async t => {
   await assert.rejects(buildFlow(requester, 'Manager Name'), /exactly one level 5/);
   approvalHierarchy = [{ level: 5, approver: 'one@example.com' }, { level: 5, approver: 'two@example.com' }];
   await assert.rejects(buildFlow(requester, 'Manager Name'), /exactly one level 5/);
+});
+
+test('NEONWORKS admin requires a configured, existing account ID', async t => {
+  t.mock.method(ApproveFlow, 'findById', async () => ({ _id: id(), approvalHierarchy: [{ level: 3, approver: 'manager@example.com' }] }));
+  mockNeonAdminExists(t);
+  const requester = { company: 'NEONWORKS', flow: id() };
+  const original = process.env.PURCHASE_REQUEST_ADMIN_USER_ID;
+  try {
+    for (const value of [undefined, '', 'not-an-id', String(id())]) {
+      if (value === undefined) delete process.env.PURCHASE_REQUEST_ADMIN_USER_ID;
+      else process.env.PURCHASE_REQUEST_ADMIN_USER_ID = value;
+      await assert.rejects(buildFlow(requester, 'Manager Name'), /admin account is not configured/);
+    }
+  } finally {
+    process.env.PURCHASE_REQUEST_ADMIN_USER_ID = original;
+  }
+});
+
+test('legacy name-assigned admin steps are authorized by the configured account ID only', () => {
+  const step = { role: 'admin', identityName: 'sureerat janhom' };
+  assert.ok(canAct(step, { _id: neonAdminId, firstName: 'Renamed', lastName: 'Account' }));
+  assert.ok(!canAct(step, { _id: id(), firstName: 'Sureerat', lastName: 'Janhom' }));
+  assert.ok(!canAct({ role: 'admin', identityName: 'someone else' }, { _id: neonAdminId }));
+});
+
+test('NEONWORKS supervisor falls back when Natorn is missing or first in the QT flow', async t => {
+  let approvalHierarchy;
+  t.mock.method(ApproveFlow, 'findById', async () => ({ _id: id(), approvalHierarchy }));
+  mockNeonAdminExists(t);
+  const requester = { company: 'NEONWORKS', flow: id() };
+  approvalHierarchy = [{ level: 3, approver: 'lead@example.com' }, { level: 4, approver: 'head@example.com' }];
+  let flow = await buildFlow(requester, 'Manager Name');
+  assert.deepEqual(flow.approvalSteps.map(step => [step.role, step.approver]), [
+    ['manager', 'head@example.com'], ['approver', 'natorn@neonworks.co.th'], ['admin', undefined],
+  ]);
+  assert.equal(flow.approvalSteps[1].level, undefined);
+  approvalHierarchy = [{ level: 3, approver: 'natorn@neonworks.co.th' }, { level: 4, approver: 'head@example.com' }];
+  flow = await buildFlow(requester, 'Manager Name');
+  assert.deepEqual(flow.approvalSteps.map(step => step.role), ['approver', 'admin']);
+});
+
+test('NEONWORKS creation fails when the Natorn account does not exist', async t => {
+  t.mock.method(ApproveFlow, 'findById', async () => ({ _id: id(), approvalHierarchy: [{ level: 3, approver: 'lead@example.com' }] }));
+  mockNeonAdminExists(t);
+  t.mock.method(User, 'findOne', () => ({ select: async () => null }));
+  await assert.rejects(buildFlow({ company: 'NEONWORKS', flow: id() }, 'Manager Name'), /final approver account is not configured/);
+});
+
+test('creator edits an untouched request; others and in-progress requests are refused', async () => {
+  const doc = makeDoc();
+  const creator = { _id: doc.createdByUser };
+  assert.throws(() => applyEdit(doc, { _id: managerId }, { urgency: 'Low' }), err => err.status === 403);
+  assert.throws(() => applyEdit(doc, creator, {}), /at least one/);
+  assert.throws(() => applyEdit(doc, creator, { managerName: '  ' }), /managerName is required/);
+  applyEdit(doc, creator, {
+    urgency: 'Low', managerName: ' New Manager ', status: 'Completed', approvalSteps: [], createdByUser: id(),
+    items: [{ quantity: 2, description: 'Mouse', unitPrice: 300, extra: 'ignored' }],
+  });
+  await doc.validate();
+  assert.equal(doc.urgency, 'Low');
+  assert.equal(doc.managerName, 'New Manager');
+  assert.equal(doc.status, 'Pending');
+  assert.equal(doc.approvalSteps.length, 3);
+  assert.equal(String(doc.createdByUser), String(creator._id));
+  assert.equal(doc.items[0].quantity, 2);
+  applyEdit(doc, creator, { items: [] });
+  await assert.rejects(doc.validate(), /At least one item/);
+  applyEdit(doc, creator, { items: [{ quantity: 1, description: 'Laptop' }] });
+  applyAction(doc, { _id: managerId }, { status: 'Approved' });
+  assert.throws(() => applyEdit(doc, creator, { urgency: 'High' }), err => err.status === 409);
+  assert.throws(() => applyCancel(doc, creator), err => err.status === 409);
+});
+
+test('rejected request can be edited and resubmitted with rejection history kept', async () => {
+  const doc = makeDoc();
+  const creator = { _id: doc.createdByUser };
+  applyAction(doc, { _id: managerId }, { status: 'Approved' });
+  applyAction(doc, { _id: approverId }, { status: 'Rejected', reason: 'Too expensive' });
+  applyEdit(doc, creator, { items: [{ quantity: 1, description: 'Cheaper laptop', unitPrice: 15000 }] });
+  await doc.validate();
+  assert.equal(doc.status, 'Pending');
+  assert.ok(doc.resubmittedAt instanceof Date);
+  assert.ok(doc.approvalSteps.every(step => step.status === 'Pending' && !step.actedAt && !step.reason));
+  assert.equal(doc.rejectionHistory.length, 1);
+  assert.equal(doc.rejectionHistory[0].reason, 'Too expensive');
+  assert.equal(doc.rejectionHistory[0].role, 'approver');
+  // Approval restarts from the first step.
+  assert.throws(() => applyAction(doc, { _id: approverId }, { status: 'Approved' }), /current approver/);
+  applyAction(doc, { _id: managerId }, { status: 'Approved' });
+  assert.equal(doc.approvalSteps[0].status, 'Approved');
+});
+
+test('creator cancels untouched or rejected requests; cancelled requests are closed', async () => {
+  const doc = makeDoc();
+  const creator = { _id: doc.createdByUser };
+  assert.throws(() => applyCancel(doc, { _id: adminId }), err => err.status === 403);
+  applyCancel(doc, creator);
+  await doc.validate();
+  assert.equal(doc.status, 'Cancelled');
+  assert.ok(doc.cancelledAt instanceof Date);
+  assert.throws(() => applyAction(doc, { _id: managerId }, { status: 'Approved' }), /already closed/);
+  assert.throws(() => applyEdit(doc, creator, { urgency: 'Low' }), err => err.status === 409);
+  assert.throws(() => applyCancel(doc, creator), err => err.status === 409);
+  const rejected = makeDoc();
+  applyAction(rejected, { _id: managerId }, { status: 'Rejected', reason: 'No budget' });
+  applyCancel(rejected, { _id: rejected.createdByUser });
+  assert.equal(rejected.status, 'Cancelled');
+  const completed = makeDoc();
+  for (const userId of [managerId, approverId, adminId]) applyAction(completed, { _id: userId }, { status: 'Approved' });
+  assert.throws(() => applyCancel(completed, { _id: completed.createdByUser }), err => err.status === 409);
+});
+
+test('update and delete routes are wired to the controller', () => {
+  const router = require('../routes/purchaseRequestRoutes');
+  const routes = router.stack.filter(layer => layer.route).map(layer => `${Object.keys(layer.route.methods)[0]} ${layer.route.path}`);
+  assert.ok(routes.includes('patch /:id'));
+  assert.ok(routes.includes('delete /:id'));
+  assert.ok(routes.includes('patch /:id/approval'));
 });
